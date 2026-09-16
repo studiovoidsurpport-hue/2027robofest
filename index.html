@@ -292,6 +292,13 @@
   .mention-item.slash-item{flex-direction:column; align-items:flex-start; gap:2px;}
   .mention-item:hover, .mention-item.sel{background:var(--blue-glow);}
   .empty-chan{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--text-faint); gap:6px;}
+  .bot-token-pill{display:flex;align-items:center;gap:5px;height:30px;padding:0 9px;border:1px solid var(--border-soft);border-radius:15px;background:var(--panel-2);color:var(--text-dim);font-size:12px;white-space:nowrap;}
+  .bot-token-pill b{color:var(--text);font-variant-numeric:tabular-nums;}
+  .access-notice{padding:7px 12px;background:var(--panel-2);border-top:1px solid var(--border-soft);color:var(--text-dim);font-size:12px;text-align:center;}
+  .access-notice.timeout{color:var(--warn);}
+  .access-notice button{margin-left:6px;}
+  @media(max-width:700px){.bot-token-pill{padding:0 7px}.bot-token-pill span{display:none}.composer .img-btn,.composer .file-btn,.composer .poll-btn{width:32px}.composer textarea{min-width:0;font-size:14px;}}
+  @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.001ms!important;transition-duration:.001ms!important;}}
   .empty-chan .big{font-size:30px;}
 
   .pin-bar{
@@ -448,6 +455,13 @@
   .markdown-body code{background:var(--panel-2);border-radius:4px;padding:1px 4px;}
   .markdown-body pre code{background:transparent;padding:0;}
   .bot-answer-meta{display:flex;flex-wrap:wrap;gap:6px;margin:7px 0 5px;font-size:10px;color:var(--text-faint);}
+  .bot-streaming-bubble{margin:8px 0 12px 44px;max-width:min(760px,calc(100% - 58px));}
+  .bot-streaming-head{display:flex;align-items:center;gap:7px;margin-bottom:5px;font-size:12px;font-weight:700;}
+  .bot-streaming-status{font-size:10px;color:var(--blue);font-weight:600;}
+  .bot-streaming-content{border:1px solid var(--border-soft);background:var(--panel);border-radius:10px;padding:10px 12px;line-height:1.65;box-shadow:0 2px 10px rgba(0,0,0,.04);}
+  .bot-streaming-cursor{display:inline-block;width:7px;height:1.05em;vertical-align:-2px;margin-left:2px;background:currentColor;animation:botCursor .9s steps(1) infinite;}
+  @keyframes botCursor{50%{opacity:0}}
+  @media (prefers-reduced-motion: reduce){.bot-streaming-cursor{animation:none;opacity:.7;}}
   .bot-answer-meta span{padding:3px 6px;border:1px solid var(--border-soft);border-radius:10px;background:var(--panel-2);}
   .bot-token-badge{font-size:10px;color:var(--blue);}
 
@@ -730,7 +744,7 @@
         <button class="icon-btn hidden" id="searchBtn" title="메시지 검색">🔍</button>
         <button class="icon-btn hidden" id="exportBtn" title="채팅 내보내기">💾</button>
         <button class="icon-btn hidden" id="favChanBtn" title="현재 채널 즐겨찾기">☆</button>
-        <button class="icon-btn" id="toolsBtn" title="NEXTBOT 도구/설정">⌘</button>
+        <button class="icon-btn" id="toolsBtn" title="NEXTBOT 도구/설정" aria-label="NEXTBOT 도구 및 접근성 설정">⌘</button><div id="botTokenPill" class="bot-token-pill" title="AI 봇 토큰"><span>🤖</span><b id="botTokenCount">-</b></div>
         <button class="icon-btn" id="notifBtn">🔔<span class="badge-count hidden" id="notifCount">0</span></button>
         <button class="icon-btn" id="memberBtn" title="팀원 목록">👥</button>
       </div>
@@ -784,11 +798,11 @@
           <div class="mention-pop hidden" id="mentionPop"></div>
           <div class="mention-pop hidden" id="channelPop"></div>
           <div class="mention-pop hidden" id="slashPop"></div>
-          <button class="img-btn" id="imgBtn" title="이미지 첨부 (URL)">🖼</button>
-          <button class="file-btn" id="fileBtn" title="파일 목록 첨부 (URL)">📎</button>
-          <button class="poll-btn" id="pollBtn" title="투표 만들기">📊</button>
-          <textarea id="msgInput" rows="1" placeholder="메시지 보내기... (@ 멘션, # 채널)"></textarea>
-          <button class="send-btn" id="sendBtn" disabled>➤</button>
+          <button class="img-btn" id="imgBtn" title="이미지 첨부 (URL)" aria-label="이미지 첨부">🖼</button>
+          <button class="file-btn" id="fileBtn" title="파일 목록 첨부 (URL)" aria-label="파일 첨부">📎</button>
+          <button class="poll-btn" id="pollBtn" title="투표 만들기" aria-label="투표 만들기">📊</button>
+          <textarea id="msgInput" rows="1" aria-label="메시지 입력" placeholder="메시지 보내기... (@ 멘션, # 채널)"></textarea>
+          <button class="send-btn" id="sendBtn" disabled aria-label="메시지 보내기">➤</button>
         </div>
       </div>
     </div>
@@ -926,6 +940,11 @@ const HELP_COMMANDS = [
   { cmd:"/순위", desc:"이번 주 채팅 활동 랭킹(진행 중)을 보여줘요." },
   { cmd:"/help 또는 /도움말", desc:"이 명령어 목록을 보여줘요." },
   { cmd:"/봇채팅 질문", desc:"전체 채팅 기록을 참고해 Gemini AI에게 질문해요. 질문 1회당 토큰 1개가 사용됩니다." },
+  { cmd:"/봇도움말", desc:"AI 봇 관련 명령어와 토큰 사용법을 보여줘요." },
+  { cmd:"/내토큰", desc:"현재 보유한 AI 봇 토큰을 확인해요." },
+  { cmd:"/내상태", desc:"내 접속 상태·타임아웃·AI 봇 토큰을 확인해요." },
+  { cmd:"/핑", desc:"NEXTBOT 응답 테스트와 현재 접속 상태를 확인해요." },
+  { cmd:"/회의요약", desc:"전체 채팅 기록을 바탕으로 회의 내용을 요약해요. 토큰 1개를 사용합니다." },
 ];
 const HELP_ADMIN_COMMANDS = [
   { cmd:"/공지 제목|내용", desc:"공지를 등록하고 봇이 알려요. (관리자)" },
@@ -1317,6 +1336,7 @@ function listenUsers(){
     }
     renderMemberPanel();
     renderPresence(presenceData);
+    refreshUserAccessUI();
 
     // MVP 계산은 usersMap이 채워진 뒤 시작해야 후보 닉네임/권한 판정이 정상 작동합니다.
     // mvpCycleChecked가 중복 실행을 막아주므로 onSnapshot 안에서 호출해도 최초 1회만 실행됩니다.
@@ -1852,7 +1872,50 @@ msgInput.addEventListener('keydown',(e)=>{
 });
 $('sendBtn').onclick=sendMessage;
 
+function timeoutUntilMs(u){
+  const v=u?.timeoutUntil;
+  if(!v) return 0;
+  if(typeof v==='number') return v;
+  if(v.toMillis) return v.toMillis();
+  if(v.seconds) return v.seconds*1000;
+  return 0;
+}
+function isUserTimedOut(u=myDoc){ return timeoutUntilMs(u)>Date.now(); }
+function timeoutRemainingText(u=myDoc){
+  const ms=Math.max(0,timeoutUntilMs(u)-Date.now());
+  const sec=Math.ceil(ms/1000);
+  if(sec<=0)return '';
+  if(sec<60)return `${sec}초`;
+  const min=Math.floor(sec/60), s=sec%60;
+  if(min<60)return `${min}분${s?` ${s}초`:''}`;
+  const h=Math.floor(min/60), m=min%60;
+  if(h<24)return `${h}시간${m?` ${m}분`:''}`;
+  return `${Math.floor(h/24)}일${h%24?` ${h%24}시간`:''}`;
+}
+
+function refreshUserAccessUI(){
+  const timed=isUserTimedOut();
+  const count=botTokensOf(myDoc);
+  if($('botTokenCount')) $('botTokenCount').textContent=String(count);
+  const composer=$('msgInput');
+  const buttons=[$('imgBtn'),$('fileBtn'),$('pollBtn')];
+  if(composer){
+    composer.setAttribute('aria-describedby','accessNotice');
+    composer.placeholder=timed?`⏳ 타임아웃 · ${timeoutRemainingText()} 후 다시 입력할 수 있어요`:'메시지 보내기... (@ 멘션, # 채널)';
+    composer.setAttribute('aria-label',timed?'타임아웃으로 잠긴 메시지 입력':'메시지 입력');
+  }
+  buttons.forEach(b=>{if(b){b.disabled=timed;b.title=timed?'타임아웃 중에는 사용할 수 없습니다.':b.title;}});
+  if($('sendBtn')) $('sendBtn').disabled=timed || (!msgInput.value.trim()&&!pendingAttachments.length);
+  let notice=$('accessNotice');
+  if(timed){
+    if(!notice){notice=document.createElement('div');notice.id='accessNotice';notice.className='access-notice timeout';$('chatView')?.insertBefore(notice,$('chatView').querySelector('.composer-wrap'));}
+    notice.textContent=`⏳ 타임아웃 상태입니다. 남은 시간: ${timeoutRemainingText()}`;
+  }else if(notice){notice.remove();}
+}
+
 async function sendMessage(){
+  refreshUserAccessUI();
+  if(isUserTimedOut()){ toast(`⏳ 타임아웃 상태입니다. 남은 시간: ${timeoutRemainingText()}`); return; }
   const chNow=channels.find(c=>c.id===currentChannelId);
   if(chNow?.locked && !myDoc?.isAdmin){ toast('이 채널은 관리자가 쓰기 잠금했습니다.'); return; }
   const text=msgInput.value.trim();
@@ -1947,50 +2010,47 @@ async function bumpBotStat(field,n=1){
   try{ await updateDoc(doc(db,'settings','botStats'),{[field]:increment(n),updatedAt:serverTimestamp()}); }
   catch(e){ await setDoc(doc(db,'settings','botStats'),{[field]:n,updatedAt:serverTimestamp()},{merge:true}); }
 }
+function removeBotStreamingBubble(){const el=document.getElementById('botStreamingBubble');if(el)el.remove();}
+function updateBotStreamingBubble(text,status='생성 중...'){
+  let box=document.getElementById('botStreamingBubble'), list=$('msgList'); if(!list)return;
+  if(!box){box=document.createElement('div');box.id='botStreamingBubble';box.className='bot-streaming-bubble';box.innerHTML=`<div class="bot-streaming-head"><span>🤖 NEXTBOT</span><span class="bot-streaming-status" data-bot-status>${escapeHtml(status)}</span></div><div class="bot-streaming-content markdown-body" data-bot-stream-content></div>`;list.appendChild(box);}
+  box.querySelector('[data-bot-status]').textContent=status;
+  const content=box.querySelector('[data-bot-stream-content]');
+  content.innerHTML=text?renderMentions(text):'<span class="bot-streaming-status">생성 중...</span>';
+  if(text){const cursor=document.createElement('span');cursor.className='bot-streaming-cursor';content.appendChild(cursor);}
+  list.scrollTop=list.scrollHeight;
+}
+async function streamGeminiAnswer(apiKey,model,prompt,onText){
+  const url=`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
+  const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{role:'user',parts:[{text:prompt}]}],generationConfig:{temperature:0.35,maxOutputTokens:2048}})});
+  if(!res.ok){let data={};try{data=await res.json();}catch(_e){}const msg=data?.error?.message||`Gemini API 오류 (${res.status})`;const friendly=res.status===403?'Gemini 프로젝트 접근 권한이 거부되었습니다. 관리자 API 키/프로젝트 상태를 확인해주세요.':res.status===429?'Gemini 요청 한도에 도달했습니다. 잠시 후 다시 시도해주세요.':res.status===404?'선택한 Gemini 모델을 찾을 수 없습니다. 관리자 페이지에서 모델을 확인해주세요.':msg;throw new Error(friendly);}
+  if(!res.body)throw new Error('이 브라우저에서는 Gemini 스트리밍을 지원하지 않습니다.');
+  const reader=res.body.getReader(),decoder=new TextDecoder('utf-8');let buffer='',answer='';
+  const consume=async raw=>{for(const line of raw.split(/\r?\n/)){const t=line.trim();if(!t||!t.startsWith('data:'))continue;const payload=t.slice(5).trim();if(payload==='[DONE]')continue;try{const obj=JSON.parse(payload),parts=obj?.candidates?.[0]?.content?.parts||[],chunk=parts.map(x=>x.text||'').join('');if(chunk){answer+=chunk;onText(answer);}}catch(_e){}}};
+  while(true){const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});const events=buffer.split(/\n\n/);buffer=events.pop()||'';for(const ev of events)await consume(ev);}buffer+=decoder.decode();if(buffer.trim())await consume(buffer);return answer.trim();
+}
 async function handleBotChatCommand(question){
   if(!question){toast('사용법: /봇채팅 질문');return;}
-  const freshUser=(await getDoc(doc(db,'users',currentUser.uid))).data()||myDoc||{};
-  const balance=botTokensOf(freshUser);
+  const freshUser=(await getDoc(doc(db,'users',currentUser.uid))).data()||myDoc||{},balance=botTokensOf(freshUser);
   if(balance<BOT_CHAT_COST){toast(`봇 토큰이 부족합니다. 현재 ${balance}개`);return;}
-  const settings=await getBotSettings();
-  const apiKey=String(settings.apiKey||'').trim();
-  let model=String(settings.model||BOT_DEFAULT_MODEL).trim();
-  if(BOT_LEGACY_MODEL_FALLBACKS[model]) model=BOT_LEGACY_MODEL_FALLBACKS[model];
-  if(!BOT_MODEL_OPTIONS.includes(model)) model=BOT_DEFAULT_MODEL;
-  if(!apiKey){toast('관리자가 Gemini API 키를 설정하지 않았습니다.');return;}
-  const started=performance.now();
-  let consumed=false;
+  const settings=await getBotSettings(),apiKey=String(settings.apiKey||'').trim();let model=String(settings.model||BOT_DEFAULT_MODEL).trim();
+  if(BOT_LEGACY_MODEL_FALLBACKS[model])model=BOT_LEGACY_MODEL_FALLBACKS[model];if(!BOT_MODEL_OPTIONS.includes(model))model=BOT_DEFAULT_MODEL;if(!apiKey){toast('관리자가 Gemini API 키를 설정하지 않았습니다.');return;}
+  const started=performance.now();let consumed=false,answer='';
   try{
-    await runTransaction(db,async tx=>{
-      const uref=doc(db,'users',currentUser.uid);
-      const usnap=await tx.get(uref);
-      const left=botTokensOf(usnap.data());
-      if(left<BOT_CHAT_COST) throw new Error('봇 토큰이 부족합니다.');
-      tx.update(uref,{botTokens:left-BOT_CHAT_COST});
-      consumed=true;
-    });
-    const history=await collectAllChatForBot();
-    const actorName=myDoc?.nickname||currentUser.displayName||'사용자';
+    await runTransaction(db,async tx=>{const uref=doc(db,'users',currentUser.uid),usnap=await tx.get(uref),left=botTokensOf(usnap.data());if(left<BOT_CHAT_COST)throw new Error('봇 토큰이 부족합니다.');tx.update(uref,{botTokens:left-BOT_CHAT_COST});consumed=true;});
+    const history=await collectAllChatForBot(),actorName=myDoc?.nickname||currentUser.displayName||'사용자';
     const prompt=`당신은 이 팀 채팅 서비스의 AI 봇 NEXTBOT입니다.\n현재 질문자: ${actorName}\n\n아래는 지금까지의 전체 채팅 기록입니다. 기록을 근거로 질문에 답하세요. 회의 요약, 특정 사람/채널에 관한 질문, 일반적인 개인 질문 모두 답할 수 있습니다. 기록에 없는 사실은 추측하지 말고 모른다고 말하세요. 답변은 한국어로, 필요한 경우 Markdown을 사용하세요(제목, 굵게, 기울임, 취소선, 목록, 표, 코드블록 등).\n\n=== 전체 채팅 기록 ===\n${history}\n\n=== 질문 ===\n${question}`;
-    const res=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,{
-      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{role:'user',parts:[{text:prompt}]}],generationConfig:{temperature:0.35,maxOutputTokens:2048}})
-    });
-    const data=await res.json();
-    if(!res.ok) throw new Error(data?.error?.message||`Gemini API 오류 (${res.status})`);
-    const answer=data?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('')?.trim();
-    if(!answer) throw new Error('Gemini가 빈 답변을 반환했습니다.');
-    const ms=Math.max(0,Math.round(performance.now()-started));
-    let stats={}; try{stats=(await getDoc(doc(db,'settings','botStats'))).data()||{};}catch(e){}
-    const questions=Number(stats.questions||0)+1, answers=Number(stats.answers||0)+1;
-    await setDoc(doc(db,'settings','botStats'),{questions,answers,lastLatencyMs:ms,lastPingMs:ms,updatedAt:serverTimestamp()},{merge:true});
-    const meta=`<div class="bot-answer-meta"><span>답변 속도: ${Math.floor(ms/60000).toString().padStart(2,'0')}분 ${Math.floor(ms/1000%60).toString().padStart(2,'0')}초</span><span>봇 핑: ${ms}ms</span><span>질문: ${questions}</span><span>답변: ${answers}</span></div>`;
-    const target=(currentChannelId&&!FEATURE_CHANNELS[currentChannelId])?currentChannelId:BOT_CHANNEL_ID;
-    await sendBotMessage(target,`${meta}\n${answer}`);
-  }catch(e){
-    console.error('Gemini bot error',e);
-    if(consumed){try{await updateDoc(doc(db,'users',currentUser.uid),{botTokens:increment(BOT_CHAT_COST)});}catch(_e){}}
-    toast('봇 답변에 실패했습니다: '+(e.message||String(e)));
-  }
+    const target=(currentChannelId&&!FEATURE_CHANNELS[currentChannelId])?currentChannelId:BOT_CHANNEL_ID,canShowHere=target===currentChannelId;
+    if(canShowHere)updateBotStreamingBubble('','생성 중...');
+    answer=await streamGeminiAnswer(apiKey,model,prompt,partial=>{if(canShowHere)updateBotStreamingBubble(partial,'생성 중...');});
+    if(!answer)throw new Error('Gemini가 빈 답변을 반환했습니다.');
+    const ms=Math.max(0,Math.round(performance.now()-started));let stats={};try{stats=(await getDoc(doc(db,'settings','botStats'))).data()||{};}catch(e){}
+    const questions=Number(stats.questions||0)+1,answersCount=Number(stats.answers||0)+1;
+    await setDoc(doc(db,'settings','botStats'),{questions,answers:answersCount,lastLatencyMs:ms,lastPingMs:ms,updatedAt:serverTimestamp()},{merge:true});
+    const meta=`<div class="bot-answer-meta"><span>답변 속도: ${Math.floor(ms/60000).toString().padStart(2,'0')}분 ${Math.floor(ms/1000%60).toString().padStart(2,'0')}초</span><span>봇 핑: ${ms}ms</span><span>질문: ${questions}</span><span>답변: ${answersCount}</span></div>`;
+    if(canShowHere)updateBotStreamingBubble(answer,'답변 완료');
+    await sendBotMessage(target,`${meta}\n${answer}`);if(canShowHere)setTimeout(removeBotStreamingBubble,250);
+  }catch(e){console.error('Gemini bot error',e);removeBotStreamingBubble();if(consumed){try{await updateDoc(doc(db,'users',currentUser.uid),{botTokens:increment(BOT_CHAT_COST)});}catch(_e){}}toast('봇 답변에 실패했습니다: '+(e.message||String(e)));}
 }
 
 /* ---------------- MVP 자동 선정: 주간 활동 통계 + 투표 + 발표 ---------------- */
@@ -2315,6 +2375,9 @@ function openToolsModal(){
       <button class="btn" id="toolZen">${u.zen?'✓ ':''}젠 모드</button>
       <button class="btn" id="toolContrast">${u.contrast?'✓ ':''}고대비</button>
       <button class="btn" id="toolMotion">${u.motion===false?'✓ ':''}효과 끄기</button>
+      <button class="btn" id="toolFontSmall">${u.font==='small'?'✓ ':''}작은 글씨</button>
+      <button class="btn" id="toolFontNormal">${u.font==='normal'?'✓ ':''}기본 글씨</button>
+      <button class="btn" id="toolFontLarge">${u.font==='large'?'✓ ':''}큰 글씨</button>
     </div></div>
     <div class="tool-section"><b>개인 도구</b><div class="tool-grid">
       <button class="btn" id="toolBookmarks">🔖 북마크</button>
@@ -2328,6 +2391,9 @@ function openToolsModal(){
   $('toolZen').onclick=()=>{const x=uiSettings();x.zen=!x.zen;saveUiSettings(x);openToolsModal();};
   $('toolContrast').onclick=()=>{const x=uiSettings();x.contrast=!x.contrast;saveUiSettings(x);openToolsModal();};
   $('toolMotion').onclick=()=>{const x=uiSettings();x.motion=x.motion===false?true:false;saveUiSettings(x);openToolsModal();};
+  $('toolFontSmall').onclick=()=>{const x=uiSettings();x.font='small';saveUiSettings(x);openToolsModal();};
+  $('toolFontNormal').onclick=()=>{const x=uiSettings();x.font='normal';saveUiSettings(x);openToolsModal();};
+  $('toolFontLarge').onclick=()=>{const x=uiSettings();x.font='large';saveUiSettings(x);openToolsModal();};
   $('toolBookmarks').onclick=openBookmarksModal;
   $('toolFavs').onclick=openFavoriteChannelsModal;
   $('toolFocus').onclick=()=>{closeModal();startFocusTimer(25);};
@@ -2338,6 +2404,11 @@ function openToolsModal(){
 
 async function handleMegaCommand(cmd,args){
   switch(cmd){
+    case '/봇도움말': { openCommandHelpModal(); return true; }
+    case '/내토큰': { const u=(await getDoc(doc(db,'users',currentUser.uid))).data()||myDoc||{}; await postBotReply(`🤖 ${myDoc.nickname}님의 AI 봇 토큰: **${botTokensOf(u)}개**\n• /봇채팅 질문 1회 = 1토큰\n• /회의요약도 1회당 1토큰을 사용합니다.`); return true; }
+    case '/내상태': { const u=(await getDoc(doc(db,'users',currentUser.uid))).data()||myDoc||{}; const p=presenceData[currentUser.uid]; await postBotReply(`👤 **${u.nickname||myDoc.nickname}**\n상태: ${isUserTimedOut(u)?`⏳ 타임아웃 (${timeoutRemainingText(u)})`:'✅ 이용 가능'}\n접속: ${p?.state==='online'?'🟢 온라인':'⚫ 오프라인'}\nAI 봇 토큰: 🤖 ${botTokensOf(u)}개`); return true; }
+    case '/핑': { const t=performance.now(); const ping=Math.max(0,Math.round(performance.now()-t)); await postBotReply(`🏓 **PONG!**\n봇 처리: ${ping}ms\n현재 상태: ${isUserTimedOut()?'⏳ 타임아웃':'🟢 정상 이용 가능'}`); return true; }
+    case '/회의요약': { if(!args) args='지금까지의 회의 내용을 핵심 결정사항, 할 일, 담당자, 일정 중심으로 요약해줘.'; await handleBotChatCommand(args); return true; }
     case '/내점수': {
       const r=await computeRanking(weekIdOf(new Date())); const me=r.find(x=>x.uid===currentUser.uid);
       await postBotReply(me?`⭐ ${myDoc.nickname}님의 이번 주 점수: ${me.score}점\n메시지 ${me.msgCount}개 + 받은 리액션 ${me.reactCount}개 × ${MVP_REACT_WEIGHT}`:'⭐ 이번 주 MVP 집계 점수가 아직 없어요.'); return true;
@@ -2620,6 +2691,7 @@ $('favChanBtn').onclick=toggleFavoriteChannel;
 $('toolsBtn').onclick=openToolsModal;
 $('jumpBottomBtn').onclick=()=>{const l=$('msgList'); if(l)l.scrollTo({top:l.scrollHeight,behavior:'smooth'});};
 $('msgList').addEventListener('scroll',()=>{const l=$('msgList'); const far=l.scrollHeight-l.scrollTop-l.clientHeight>260; $('jumpBottomBtn').classList.toggle('show',far && !document.body.classList.contains('zen-no-jump'));});
+setInterval(()=>{ if(myDoc){ refreshUserAccessUI(); } },1000);
 window.addEventListener('keydown',(e)=>{
   if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'&&currentChannelId&&!FEATURE_CHANNELS[currentChannelId]){e.preventDefault();$('searchBtn').click();}
   if(e.key==='Escape'){ if($('modalBg'))closeModal(); else if(!$('searchBox').classList.contains('hidden'))closeSearch(); }
@@ -2846,6 +2918,7 @@ function openPollModal(){
   };
   $('pollCancel').onclick=closeModal;
   $('pollSave').onclick=async ()=>{
+    if(isUserTimedOut()){toast(`⏳ 타임아웃 상태입니다. 남은 시간: ${timeoutRemainingText()}`);return;}
     const q=$('pollQ').value.trim();
     const opts=Array.from($('pollOptsEdit').querySelectorAll('input')).map(i=>i.value.trim()).filter(Boolean);
     if(!q){ toast('질문을 입력해주세요.'); return; }
@@ -3480,8 +3553,8 @@ function renderAdminUsers(){
     <div class="admin50-toolbar">
       <input id="a50UserSearch" placeholder="닉네임 / 이메일 / UID 검색">
       <select id="a50RoleFilter"><option value="">모든 역할</option>${Object.entries(ROLE_DEFS).filter(([k])=>k!=='bot').map(([k,v])=>`<option value="${k}">${escapeHtml(v.short)}</option>`).join('')}</select>
-      <select id="a50StateFilter"><option value="">모든 상태</option><option value="online">온라인</option><option value="offline">오프라인</option><option value="disabled">비활성</option><option value="admin">관리자</option></select>
-      <select id="a50UserSort"><option value="name">닉네임순</option><option value="online">온라인 우선</option><option value="disabled">비활성 우선</option><option value="recent">최근 접속순</option></select>
+      <select id="a50StateFilter"><option value="">모든 상태</option><option value="online">온라인</option><option value="offline">오프라인</option><option value="disabled">정지</option><option value="timeout">타임아웃</option><option value="admin">관리자</option></select>
+      <select id="a50UserSort"><option value="name">닉네임순</option><option value="online">온라인 우선</option><option value="disabled">정지 우선</option><option value="timeout">타임아웃 우선</option><option value="recent">최근 접속순</option></select>
     </div>
     <div class="admin50-toolbar">
       <button class="btn btn-sm" id="a50SelectAll">전체 선택</button>
@@ -3518,12 +3591,14 @@ function a50FilteredUsers(){
     if(state==='online') stateHit=presenceData[u.uid]?.state==='online';
     if(state==='offline') stateHit=presenceData[u.uid]?.state!=='online';
     if(state==='disabled') stateHit=!!u.disabled;
+    if(state==='timeout') stateHit=isUserTimedOut(u);
     if(state==='admin') stateHit=!!u.isAdmin;
     return hit&&roleHit&&stateHit;
   });
   arr.sort((a,b)=>{
     if(sort==='online') return Number(presenceData[b.uid]?.state==='online')-Number(presenceData[a.uid]?.state==='online') || (a.nickname||'').localeCompare(b.nickname||'');
     if(sort==='disabled') return Number(!!b.disabled)-Number(!!a.disabled) || (a.nickname||'').localeCompare(b.nickname||'');
+    if(sort==='timeout') return Number(isUserTimedOut(b))-Number(isUserTimedOut(a)) || (a.nickname||'').localeCompare(b.nickname||'');
     if(sort==='recent') return a50Ts(b.lastSeen)-a50Ts(a.lastSeen);
     return (a.nickname||'').localeCompare(b.nickname||'');
   });
@@ -3539,7 +3614,7 @@ function a50RenderUserRows(){
       <td><input class="admin50-check" type="checkbox" data-a50sel="${u.uid}" ${admin50SelectedUsers.has(u.uid)?'checked':''}></td>
       <td><b>${escapeHtml(u.nickname||'?')}</b><div class="admin50-muted">${escapeHtml(u.email||'')}<br>${escapeHtml(u.uid)}</div></td>
       <td>${escapeHtml(rolesLabel(u.roles))}${u.isAdmin?' · 👑':''}</td>
-      <td>${u.disabled?'<span class="pill fail">비활성</span>':online?'<span class="pill ok">온라인</span>':'오프라인'}</td>
+      <td>${u.disabled?'<span class="pill fail">정지</span>':isUserTimedOut(u)?`<span class="pill fail">타임아웃 · ${escapeHtml(timeoutRemainingText(u))}</span>`:online?'<span class="pill ok">온라인</span>':'오프라인'}</td>
       <td>${escapeHtml(a50Date(u.lastSeen))}</td>
       <td class="actions"><button class="btn btn-sm" data-a50manage="${u.uid}">상세</button><button class="btn btn-sm" data-a50uid="${u.uid}">UID</button><button class="btn btn-sm" data-a50mail="${u.uid}">메일</button></td>
     </tr>`}).join('')}</tbody></table>`:'<div class="empty">조건에 맞는 사용자가 없습니다.</div>';
@@ -3596,8 +3671,9 @@ async function openUserManageModal(uid){
     <div class="field"><label>닉네임 강제 변경</label><input type="text" id="mgNick" value="${escapeHtml(u.nickname||'')}"></div>
     <div class="field"><label>연락용 이메일</label><input type="text" id="mgContactEmail" value="${escapeHtml(u.contactEmail||'')}"></div>
     <div class="field"><label>역할</label><div class="chip-select" id="mgRoleChips">${Object.entries(ROLE_DEFS).filter(([k])=>k!=='bot').map(([k,v])=>`<div class="chip-opt ${((u.roles||[]).includes(k))?'on':''}" data-role="${k}">${v.label}</div>`).join('')}</div></div>
+    <div class="field"><label>⏳ 타임아웃</label><div class="admin50-toolbar"><button class="btn btn-sm" id="mgTimeout1">+1분</button><button class="btn btn-sm" id="mgTimeout5">+5분</button><button class="btn btn-sm" id="mgTimeout10">+10분</button><button class="btn btn-sm" id="mgTimeout60">+1시간</button><button class="btn btn-sm" id="mgTimeoutDay">+1일</button><button class="btn btn-sm admin50-danger" id="mgTimeoutClear">해제</button></div><div class="admin50-muted" id="mgTimeoutInfo">${isUserTimedOut(u)?'현재 타임아웃: '+escapeHtml(timeoutRemainingText(u)):'현재 타임아웃 없음'}</div></div>
     <div class="field"><label>계정 상태</label><div class="chip-select"><div class="chip-opt ${!u.disabled?'on':''}" id="mgEnable">활성화</div><div class="chip-opt ${u.disabled?'on':''}" id="mgDisable">비활성화</div></div></div>
-    <div class="field"><label>AI 봇 토큰</label><div class="admin50-toolbar"><input type="number" min="0" id="mgBotTokens" value="${botTokensOf(u)}"><button class="btn btn-sm" id="mgBotGrant">+10</button><button class="btn btn-sm" id="mgBotGrant50">+50</button></div><div class="admin50-muted">사용자가 /봇채팅을 1회 실행할 때 1토큰을 사용합니다.</div></div>
+    <div class="field"><label>🤖 AI 봇 토큰</label><div class="admin50-toolbar"><input type="number" min="0" id="mgBotTokens" value="${botTokensOf(u)}"><button class="btn btn-sm" id="mgBotGrant">+10</button><button class="btn btn-sm" id="mgBotGrant50">+50</button><button class="btn btn-sm" id="mgBotGrant100">+100</button><button class="btn btn-sm" id="mgBotGrant500">+500</button><button class="btn btn-sm" id="mgBotGrant1000">+1000</button><button class="btn btn-sm admin50-danger" id="mgBotMinus10">-10</button><button class="btn btn-sm admin50-danger" id="mgBotMinus50">-50</button><button class="btn btn-sm admin50-danger" id="mgBotZero">0</button></div><div class="admin50-muted">사용자가 /봇채팅을 1회 실행할 때 1토큰을 사용합니다.</div></div>
     <div class="field"><label>관리자 권한</label><div class="chip-select"><div class="chip-opt ${u.isAdmin?'on':''}" id="mgAdminToggle">${u.isAdmin?'👑 관리자':'일반 사용자'}</div></div></div>
     <div class="admin50-muted">최근 접속: ${escapeHtml(a50Date(u.lastSeen))}</div>
     <div class="admin50-toolbar" style="margin-top:12px">
@@ -3609,12 +3685,27 @@ async function openUserManageModal(uid){
   const roleSel=new Set(u.roles||[]);
   document.querySelectorAll('#mgRoleChips .chip-opt').forEach(chip=>chip.onclick=()=>{const r=chip.dataset.role;roleSel.has(r)?roleSel.delete(r):roleSel.add(r);chip.classList.toggle('on',roleSel.has(r));});
   let disabledState=!!u.disabled, adminState=!!u.isAdmin;
+  let timeoutUntil=timeoutUntilMs(u);
   const paintState=()=>{ $('mgEnable').classList.toggle('on',!disabledState);$('mgDisable').classList.toggle('on',disabledState);$('mgAdminToggle').classList.toggle('on',adminState);$('mgAdminToggle').textContent=adminState?'👑 관리자':'일반 사용자'; };
   $('mgEnable').onclick=()=>{disabledState=false;paintState();};
   $('mgDisable').onclick=()=>{if(uid===currentUser.uid){toast('자기 계정은 비활성화할 수 없습니다.');return;}disabledState=true;paintState();};
   $('mgAdminToggle').onclick=()=>{if(uid===currentUser.uid&&adminState){toast('현재 로그인한 자기 관리자 권한은 해제하지 않도록 막았습니다.');return;}adminState=!adminState;paintState();};
-  $('mgBotGrant').onclick=()=>{ $('mgBotTokens').value=botTokensOf({botTokens:Number($('mgBotTokens').value)||0})+10; };
+  const paintTimeout=()=>{ $('mgTimeoutInfo').textContent=timeoutUntil>Date.now()?`현재 타임아웃: ${timeoutRemainingText({timeoutUntil})}`:'현재 타임아웃 없음'; };
+  const addTimeout=(ms)=>{ timeoutUntil=Math.max(Date.now(),timeoutUntil)+ms; paintTimeout(); };
+  $('mgTimeout1').onclick=()=>addTimeout(60*1000);
+  $('mgTimeout5').onclick=()=>addTimeout(5*60*1000);
+  $('mgTimeout10').onclick=()=>addTimeout(10*60*1000);
+  $('mgTimeout60').onclick=()=>addTimeout(60*60*1000);
+  $('mgTimeoutDay').onclick=()=>addTimeout(24*60*60*1000);
+  $('mgTimeoutClear').onclick=()=>{timeoutUntil=0;paintTimeout();};
+    $('mgBotGrant').onclick=()=>{ $('mgBotTokens').value=botTokensOf({botTokens:Number($('mgBotTokens').value)||0})+10; };
   $('mgBotGrant50').onclick=()=>{ $('mgBotTokens').value=botTokensOf({botTokens:Number($('mgBotTokens').value)||0})+50; };
+  $('mgBotGrant100').onclick=()=>{ $('mgBotTokens').value=botTokensOf({botTokens:Number($('mgBotTokens').value)||0})+100; };
+  $('mgBotGrant500').onclick=()=>{ $('mgBotTokens').value=botTokensOf({botTokens:Number($('mgBotTokens').value)||0})+500; };
+  $('mgBotGrant1000').onclick=()=>{ $('mgBotTokens').value=botTokensOf({botTokens:Number($('mgBotTokens').value)||0})+1000; };
+  $('mgBotMinus10').onclick=()=>{ $('mgBotTokens').value=Math.max(0,botTokensOf({botTokens:Number($('mgBotTokens').value)||0})-10); };
+  $('mgBotMinus50').onclick=()=>{ $('mgBotTokens').value=Math.max(0,botTokensOf({botTokens:Number($('mgBotTokens').value)||0})-50); };
+  $('mgBotZero').onclick=()=>{ $('mgBotTokens').value=0; };
   $('mgCopyUid').onclick=()=>a50Copy(uid); $('mgCopyMail').onclick=()=>a50Copy(u.email||'');
   $('mgResetPw').onclick=async()=>{try{await sendPasswordResetEmail(auth,u.email);toast('재설정 메일을 보냈습니다.');await auditAdmin('password-reset-mail',uid,u.email||'');}catch(e){toast('메일 발송 실패: '+translateAuthErr(e));}};
   $('mgResetStats').onclick=async()=>{
@@ -3628,8 +3719,8 @@ async function openUserManageModal(uid){
   $('mgSave').onclick=async()=>{
     const nick=$('mgNick').value.trim(); if(!nick){toast('닉네임을 입력하세요.');return;}
     let roles=[...roleSel];if(!roles.length)roles=['member'];
-    await updateDoc(doc(db,'users',uid),{nickname:nick,contactEmail:$('mgContactEmail').value.trim(),roles,disabled:disabledState,isAdmin:adminState,botTokens:Math.max(0,Number($('mgBotTokens').value)||0)});
-    await auditAdmin('update-user',uid,`nick=${nick}, roles=${roles.join('|')}, disabled=${disabledState}, admin=${adminState}, botTokens=${Math.max(0,Number($('mgBotTokens').value)||0)}`);
+    await updateDoc(doc(db,'users',uid),{nickname:nick,contactEmail:$('mgContactEmail').value.trim(),roles,disabled:disabledState,isAdmin:adminState,timeoutUntil:timeoutUntil||null,botTokens:Math.max(0,Number($('mgBotTokens').value)||0)});
+    await auditAdmin('update-user',uid,`nick=${nick}, roles=${roles.join('|')}, disabled=${disabledState}, timeoutUntil=${timeoutUntil||0}, admin=${adminState}, botTokens=${Math.max(0,Number($('mgBotTokens').value)||0)}`);
     toast('계정을 저장했습니다.');closeModal();
   };
 }
