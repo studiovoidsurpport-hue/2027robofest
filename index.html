@@ -955,7 +955,7 @@ function botCostFromUsage(usage){
 }
 const BOT_DEFAULT_MODEL = "gemini-3.6-flash";
 const BOT_DEFAULT_TYPING_SPEED = 1;
-const BOT_TYPING_SPEED_OPTIONS = [0.25,0.5,0.75,1,1.5,2,3];
+const BOT_TYPING_SPEED_OPTIONS = [0.25,0.5,0.75,1,1.5,2,3,5,10,20,50,100];
 const BOT_MODEL_OPTIONS = ["gemini-3.6-flash","gemini-3.5-flash","gemini-3.5-flash-lite","gemini-2.5-flash","gemini-2.5-pro"];
 const BOT_LEGACY_MODEL_FALLBACKS = {
   "gemini-2.0-flash":"gemini-3.6-flash",
@@ -974,6 +974,7 @@ const HELP_COMMANDS = [
   { cmd:"/help 또는 /도움말", desc:"이 명령어 목록을 보여줘요." },
   { cmd:"/봇채팅 질문", desc:"전체 채팅 기록을 참고해 Gemini AI에게 질문해요. Gemini 사용량에 따라 1~16토큰을 사용합니다." },
   { cmd:"/봇도움말", desc:"AI 봇 관련 명령어와 토큰 사용법을 보여줘요." },
+  { cmd:"/봇채팅 질문", desc:"NEXTBOT이 필요한 경우 팀원·채널·메시지·기록 조회 및 지정 채널 게시 같은 도구를 사용할 수 있습니다." },
   { cmd:"/내토큰", desc:"현재 보유한 AI 봇 토큰을 확인해요." },
   { cmd:"/내상태", desc:"내 접속 상태·타임아웃·AI 봇 토큰을 확인해요." },
   { cmd:"/핑", desc:"NEXTBOT 응답 테스트와 현재 접속 상태를 확인해요." },
@@ -2088,6 +2089,87 @@ async function getBotSettings(){
   const s=await getDoc(doc(db,'settings','bot'));
   return s.exists()?s.data():{};
 }
+
+/* ---------------- NEXTBOT Agent Tools ---------------- */
+const NEXTBOT_TOOL_POLICY = {
+  readTeam:true, readChannels:true, searchMessages:true, readRecords:true,
+  postMessage:true, pinMessage:true, createChannel:true, manageTasks:true
+};
+function nextbotToolCatalog(){
+  return `NEXTBOT 도구 권한:
+- team.list: 전체 팀원 기본 프로필/역할/접속상태 조회
+- channels.list: 채널/카테고리 목록 조회
+- messages.search: 전체 채팅에서 키워드 검색
+- records.read: 경기전략/미션/연습/기록/테스트 데이터 조회
+- messages.post: 지정 채널에 NEXTBOT 이름으로 메시지 게시
+- messages.pin: 지정 메시지 고정/해제 (관리자 권한 필요)
+- channels.create: 새 채널 생성 (관리자 권한 필요)
+- tasks.manage: 현재 사용자의 할 일 추가/완료/삭제
+
+도구 사용 규칙:
+1) 질문에 답하기 위해 필요한 경우 도구를 적극적으로 사용하세요.
+2) 읽기 도구는 자유롭게 사용할 수 있습니다.
+3) 쓰기 도구는 사용자가 명시적으로 요청한 경우에만 사용하세요.
+4) 관리자 전용 도구는 실제 관리자일 때만 실행됩니다.
+5) 실행 결과를 사실처럼 꾸며내지 말고 실제 결과를 바탕으로 답하세요.
+6) 도구가 필요 없으면 사용하지 마세요.
+
+도구 호출 형식(필요할 때 답변에 포함):
+[[NEXTBOT_TOOL]]{"name":"team.list","args":{}}
+[[NEXTBOT_TOOL]]{"name":"messages.search","args":{"query":"검색어","limit":20}}
+[[NEXTBOT_TOOL]]{"name":"messages.post","args":{"channel":"chan-teamchat","content":"게시할 내용"}}
+[[NEXTBOT_TOOL]]{"name":"messages.pin","args":{"channel":"chan-teamchat","messageId":"문서ID","pinned":true}}
+[[NEXTBOT_TOOL]]{"name":"channels.create","args":{"categoryId":"cat-team","name":"새채널"}}
+도구 호출 후에는 [[NEXTBOT_TOOL]] 줄을 최종 답변에서 제외하세요.`;
+}
+async function nextbotAgentTool(name,args={},actorUid){
+  const actor=usersMap[actorUid]||myDoc||{};
+  if(name==='team.list'){
+    return Object.values(usersMap).filter(u=>u && u.uid!=='BOT').map(u=>({uid:u.uid,nickname:u.nickname||'',roles:u.roles||[],online:!!u.online,status:u.status||''}));
+  }
+  if(name==='channels.list'){
+    return channels.map(c=>({id:c.id,name:c.name,categoryId:c.categoryId||'',category:c.categoryName||'',feature:!!FEATURE_CHANNELS[c.id]}));
+  }
+  if(name==='messages.search'){
+    const q=String(args.query||'').trim().toLowerCase(); if(!q)return [];
+    const limit=Math.min(50,Math.max(1,Number(args.limit)||20)); const out=[];
+    for(const ch of channels){
+      try{const qs=await getDocs(query(collection(db,'channels',ch.id,'messages'),orderBy('createdAt','desc'),limit(200)));qs.forEach(d=>{const m=d.data();if(String(m.content||'').toLowerCase().includes(q)&&out.length<limit)out.push({id:d.id,channelId:ch.id,channel:ch.name,user:usersMap[m.userId]?.nickname||m.botActorNickname||'사용자',content:m.content||''});});}catch(e){console.warn('agent search',e);}
+      if(out.length>=limit)break;
+    } return out;
+  }
+  if(name==='records.read'){
+    const store=String(args.store||''); if(!['strategies','missions','practices','records','tests'].includes(store))throw new Error('허용되지 않은 기록 저장소입니다.');
+    const qs=await getDocs(query(collection(db,store),limit(100))); return qs.docs.map(d=>({id:d.id,...d.data()}));
+  }
+  if(name==='messages.post'){
+    const channelId=String(args.channel||'').trim(), content=String(args.content||'').trim();
+    if(!channelId||!content)throw new Error('게시할 채널과 내용이 필요합니다.');
+    if(!channels.some(c=>c.id===channelId))throw new Error('존재하지 않는 채널입니다.');
+    await sendBotMessage(channelId,content,actorUid,`<div class="bot-answer-meta"><span>NEXTBOT Agent</span><span>게시 완료</span></div>`,{botToolAction:'messages.post'}); return {ok:true,channelId};
+  }
+  if(name==='messages.pin'){
+    if(!canUseAdminCommands())throw new Error('메시지 고정은 관리자 권한이 필요합니다.');
+    const channelId=String(args.channel||''), messageId=String(args.messageId||''); if(!channelId||!messageId)throw new Error('채널과 메시지 ID가 필요합니다.');
+    await updateDoc(doc(db,'channels',channelId,'messages',messageId),{pinned:args.pinned!==false}); await auditAdmin('bot-pin-message',`${channelId}/${messageId}`); return {ok:true};
+  }
+  if(name==='channels.create'){
+    if(!canUseAdminCommands())throw new Error('채널 생성은 관리자 권한이 필요합니다.');
+    const cat=String(args.categoryId||''), nameText=String(args.name||'').trim(); if(!cat||!nameText)throw new Error('카테고리와 채널명이 필요합니다.');
+    const ref=await addDoc(collection(db,'channels'),{name:nameText,categoryId:cat,createdAt:serverTimestamp(),createdBy:actorUid}); await auditAdmin('bot-create-channel',ref.id,nameText); return {ok:true,id:ref.id,name:nameText};
+  }
+  throw new Error('알 수 없는 NEXTBOT 도구입니다.');
+}
+async function runNextbotToolCalls(text,actorUid){
+  const re=/\[\[NEXTBOT_TOOL\]\]\s*(\{[\s\S]*?\})/g; let m,results=[],clean=text;
+  while((m=re.exec(text))){
+    try{const call=JSON.parse(m[1]);const result=await nextbotAgentTool(call.name,call.args||{},actorUid);results.push({call,result});}
+    catch(e){results.push({call:{name:'unknown'},error:e.message||String(e)});}
+    clean=clean.replace(m[0],'');
+  }
+  return {text:clean.replace(/\n{3,}/g,'\n\n').trim(),results};
+}
+
 async function collectAllChatForBot(){
   const rows=[];
   for(const ch of channels){
@@ -2192,6 +2274,8 @@ async function handleBotChatCommand(question){
     const baseBotPrompt=String(settings.defaultPrompt||defaultBotPrompt).trim()||defaultBotPrompt;
     const prompt=`${baseBotPrompt}
 
+${nextbotToolCatalog()}
+
 현재 질문자: ${actorName}
 
 === 전체 채팅 기록 ===
@@ -2204,6 +2288,12 @@ ${question}`;
     const geminiResult=await streamGeminiAnswer(apiKey,model,prompt,()=>{});
     answer=geminiResult.text; usage=geminiResult.usage||{};
     if(!answer)throw new Error('Gemini가 빈 답변을 반환했습니다.');
+    const toolRun=await runNextbotToolCalls(answer,currentUser.uid);
+    answer=toolRun.text;
+    if(toolRun.results.length){
+      const toolSummary=toolRun.results.map(r=>r.error?`- ${r.call?.name||'tool'}: 실패 — ${r.error}`:`- ${r.call?.name||'tool'}: 실행 완료`).join('\n');
+      answer += `\n\n<details><summary>🛠️ NEXTBOT 작업 기록</summary>\n${toolSummary}\n</details>`;
+    }
     finalCost=botCostFromUsage(usage);
     // 처음에는 최소 1토큰을 예약하고, 실제 사용량을 받은 뒤 추가분만 안전하게 차감합니다.
     if(finalCost>BOT_CHAT_MIN_COST){
@@ -4122,8 +4212,8 @@ async function renderAdminBot(){
     <div class="admin50-card"><h4>🤖 Gemini AI 설정</h4>
       <div class="field"><label>Gemini API 키</label><input type="password" id="a50GeminiKey" value="${escapeHtml(s.apiKey||'')}" placeholder="AIza..." autocomplete="off"></div>
       <div class="field"><label>모델 선택</label><select id="a50GeminiModel" class="admin50-input">${BOT_MODEL_OPTIONS.map(m=>`<option value="${m}" ${(s.model||BOT_DEFAULT_MODEL)===m?'selected':''}>${m}</option>`).join('')}</select></div>
-      <div class="field"><label>답변 출력 속도</label><div class="bot-typing-setting"><input id="a50BotTypingSpeed" type="range" min="0.25" max="3" step="0.25" value="${Number(s.typingSpeed||BOT_DEFAULT_TYPING_SPEED)}"><span id="a50BotTypingSpeedValue" class="bot-typing-value">${Number(s.typingSpeed||BOT_DEFAULT_TYPING_SPEED)}x</span></div><div class="admin50-muted">AI가 답변을 모두 생성한 뒤 화면에 타이핑하는 속도입니다. 기본값은 1x입니다.</div></div>
-      <div class="field"><label>⚡ NEXTBOT 권한</label><div class="admin50-muted">NEXTBOT은 전체 채팅 기록을 읽고, 현재 요청에 맞는 답변·코드·HTML/Python 미리보기용 콘텐츠를 생성하며, 봇 채널에 결과를 게시할 수 있습니다. 관리자 봇 모드에서는 관리자 권한으로 메시지를 게시할 수 있습니다.</div></div>
+      <div class="field"><label>답변 출력 속도</label><div class="bot-typing-setting"><input id="a50BotTypingSpeed" type="range" min="0.25" max="100" step="0.25" value="${Math.min(100,Math.max(0.25,Number(s.typingSpeed||BOT_DEFAULT_TYPING_SPEED)))}"><span id="a50BotTypingSpeedValue" class="bot-typing-value">${Number(s.typingSpeed||BOT_DEFAULT_TYPING_SPEED)}x</span></div><div class="admin50-muted">AI가 답변을 모두 생성한 뒤 화면에 타이핑하는 속도입니다. 기본값은 1x이며 최대 100x까지 설정할 수 있습니다.</div></div>
+      <div class="field"><label>⚡ NEXTBOT 권한</label><div class="admin50-muted">NEXTBOT은 팀원/채널 조회, 전체 메시지 검색, 전략·미션·연습·기록·테스트 조회, 지정 채널 메시지 게시를 수행할 수 있습니다. 관리자 요청에서는 메시지 고정과 채널 생성도 수행할 수 있습니다. 사용자가 명시적으로 요청하지 않은 쓰기 작업은 실행하지 않으며, 관리자 전용 작업은 관리자 권한을 검사합니다.</div></div>
       <div class="field"><label>🧠 봇 기본 프롬프트</label><textarea class="field-ta" id="a50BotDefaultPrompt" rows="9" placeholder="NEXTBOT의 기본 행동과 답변 방식을 입력하세요.">${escapeHtml(s.defaultPrompt||'')}</textarea><div class="admin50-muted">/봇채팅 질문을 처리할 때 항상 앞부분에 적용됩니다. 비워두면 기본 프롬프트를 사용합니다. 새로운 코딩·게임 생성 요청도 기록에 없다는 이유로 거절하지 않도록 설정할 수 있습니다.</div></div>
       <div class="admin50-muted">브라우저에서 Gemini API를 직접 호출하므로 API 키가 클라이언트에 노출될 수 있습니다. 실제 서비스라면 서버/Cloud Function 프록시를 권장합니다.</div>
       <div class="modal-actions"><button class="btn btn-primary" id="a50GeminiSave" style="width:auto">설정 저장</button></div>
