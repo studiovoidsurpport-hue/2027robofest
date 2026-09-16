@@ -1362,6 +1362,7 @@ function enterApp(){
   listenAdminAppSettings();
   loadDdaySetting();
   showDashboard();
+  setTimeout(()=>recoverPendingBotTasks(),700);
 }
 
 function renderAvatarInto(el, url, nick){
@@ -2071,12 +2072,16 @@ async function sendBotMessage(channelId, content, actingUid, botMetaHtml, botExt
   if(!uid) return;
   try{
     const actor=usersMap[uid]||((uid===currentUser?.uid)?myDoc:null)||{};
-    await addDoc(collection(db,'channels',channelId,'messages'), {
+    const payload={
       userId:uid, isBot:true, botName:BOT_USER.nickname, botActorUid:uid,
       botActorNickname:actor.nickname||'관리자', content, ...(botMetaHtml?{botMetaHtml}:{}), ...(botExtra||{}), createdAt: serverTimestamp()
-    });
+    };
+    // 새로고침/복구 중 같은 작업이 두 번 저장되는 것을 막기 위해 작업 ID가 있으면 고정 문서 ID를 사용합니다.
+    const taskKey=botExtra?.botTaskId ? `bot-${String(botExtra.botTaskId).replace(/[^a-zA-Z0-9_-]/g,'_')}` : '';
+    if(taskKey) await setDoc(doc(db,'channels',channelId,'messages',taskKey),payload,{merge:true});
+    else await addDoc(collection(db,'channels',channelId,'messages'), payload);
     updateDoc(doc(db,'channels',channelId), { lastMessageAt: serverTimestamp() }).catch(()=>{});
-  }catch(e){ console.error('bot message error', e); }
+  }catch(e){ console.error('bot message error', e); throw e; }
 }
 function postBotReply(text){
   const target = (currentChannelId && !FEATURE_CHANNELS[currentChannelId]) ? currentChannelId : BOT_CHANNEL_ID;
@@ -2194,6 +2199,61 @@ async function bumpBotStat(field,n=1){
 }
 let botTaskSeq=0;
 const botTasks=new Map();
+const BOT_TASK_STORE='pendingBotTasks';
+// NEXTBOT 작업 상태는 브라우저 localStorage가 아니라 Firebase users/{uid} 문서에 저장합니다.
+// 새로고침/브라우저 재접속 후에도 질문과 작업 대상 채널을 복구할 수 있습니다.
+let botTaskPersistTimers=new Map();
+function botTaskSafe(task){
+  return {
+    id:Number(task.id)||0, channelId:String(task.channelId||''), channelName:String(task.channelName||'채팅방'),
+    question:String(task.question||''), model:String(task.model||BOT_DEFAULT_MODEL), phase:String(task.phase||'queued'),
+    partial:String(task.partial||'').slice(-12000), startedAt:Number(task.startedAt||Date.now()), updatedAt:Date.now(),
+    resumed:!!task.resumed
+  };
+}
+async function persistBotTask(task, immediate=false){
+  if(!currentUser||!task)return;
+  const uid=currentUser.uid, safe=botTaskSafe(task), key=String(safe.id);
+  const save=async()=>{
+    try{
+      await runTransaction(db,async tx=>{
+        const uref=doc(db,'users',uid), snap=await tx.get(uref), data=snap.exists()?snap.data():{};
+        const pending={...(data.pendingBotTasks||{})}; pending[key]=safe;
+        const entries=Object.entries(pending).sort((a,b)=>Number(a[1]?.updatedAt||0)-Number(b[1]?.updatedAt||0)).slice(-8);
+        tx.set(uref,{pendingBotTasks:Object.fromEntries(entries)},{merge:true});
+      });
+    }catch(e){ console.warn('Firebase bot task persistence failed',e); }
+  };
+  if(immediate){
+    const timer=botTaskPersistTimers.get(key); if(timer)clearTimeout(timer); botTaskPersistTimers.delete(key);
+    await save();
+  }else{
+    const old=botTaskPersistTimers.get(key); if(old)clearTimeout(old);
+    botTaskPersistTimers.set(key,setTimeout(()=>{botTaskPersistTimers.delete(key);save();},500));
+  }
+}
+async function clearPersistedBotTask(taskId){
+  if(!currentUser)return;
+  const uid=currentUser.uid,key=String(taskId);
+  const timer=botTaskPersistTimers.get(key); if(timer)clearTimeout(timer); botTaskPersistTimers.delete(key);
+  try{
+    await runTransaction(db,async tx=>{
+      const uref=doc(db,'users',uid),snap=await tx.get(uref),data=snap.exists()?snap.data():{},pending={...(data.pendingBotTasks||{})};
+      delete pending[key]; tx.set(uref,{pendingBotTasks:pending},{merge:true});
+    });
+  }catch(e){ console.warn('Firebase bot task cleanup failed',e); }
+}
+async function getPersistedBotTasks(){
+  if(!currentUser)return [];
+  try{
+    const snap=await getDoc(doc(db,'users',currentUser.uid));
+    const pending=snap.exists()?(snap.data().pendingBotTasks||{}):{};
+    return Object.values(pending).filter(t=>t&&t.question&&t.channelId).sort((a,b)=>Number(a.startedAt||0)-Number(b.startedAt||0));
+  }catch(e){ console.warn('Firebase bot task read failed',e); return []; }
+}
+function markPersistedBotTaskDone(task){
+  void clearPersistedBotTask(task?.id);
+}
 function renderBotTaskIndicator(){
   let el=document.getElementById('botTaskIndicator');
   if(!el){
@@ -2235,6 +2295,38 @@ function updateBotStreamingBubble(text,status='생성 중...',withCodePreviews=f
   if(text){const cursor=document.createElement('span');cursor.className='bot-streaming-cursor';content.appendChild(cursor);}
   list.scrollTop=list.scrollHeight;
 }
+async function recoverPendingBotTasks(){
+  if(!currentUser||!myDoc) return;
+  const pending=await getPersistedBotTasks();
+  if(!pending.length) return;
+  // 새로고침으로 JS 실행이 끊긴 작업은 답변 전체를 다시 생성해도 최종 메시지 문서 ID가 같아서 중복 저장되지 않습니다.
+  for(const saved of pending.slice(0,4)){
+    if(!saved?.question||!saved?.channelId) { void clearPersistedBotTask(saved?.id); continue; }
+    if(botTasks.has(saved.id)) continue;
+    toast(`🤖 중단된 NEXTBOT 작업을 복구합니다 · #${saved.channelName||'채팅방'}`);
+    // 복구 작업은 기존 함수와 같은 토큰 예약 로직을 거치지 않도록 전용 프롬프트로 1회 재실행합니다.
+    const task={...saved,id:Number(saved.id)||(++botTaskSeq),resumed:true,done:false};
+    botTasks.set(task.id,task); renderBotTaskIndicator();
+    try{
+      const settings=await getBotSettings(),apiKey=String(settings.apiKey||'').trim();
+      let model=String(settings.model||BOT_DEFAULT_MODEL).trim();
+      if(BOT_LEGACY_MODEL_FALLBACKS[model])model=BOT_LEGACY_MODEL_FALLBACKS[model];
+      if(!BOT_MODEL_OPTIONS.includes(model)||!apiKey) throw new Error('NEXTBOT 복구 설정을 확인해주세요.');
+      const history=await collectAllChatForBot();
+      const defaultBotPrompt='당신은 이 팀 채팅 서비스의 AI 봇 NEXTBOT입니다. 사용자의 요청에 직접 답하세요. 과거 채팅 기록은 필요한 경우 참고 자료로 사용하세요. 기록에 없는 사실도 사용자가 새로운 창작, 코딩, 게임, HTML, Python 등의 생성을 요청한다면 직접 새로 만들어 제공할 수 있습니다. 기록에 없는 과거 사실을 사실인 것처럼 지어내지는 마세요. 답변은 한국어로, 필요한 경우 Markdown을 사용하세요.';
+      const baseBotPrompt=String(settings.defaultPrompt||defaultBotPrompt).trim()||defaultBotPrompt;
+      const prompt=`${baseBotPrompt}\n\n${nextbotToolCatalog()}\n\n현재 질문자: ${myDoc?.nickname||'사용자'}\n\n=== 전체 채팅 기록 ===\n${history}\n\n=== 중단된 작업의 질문 ===\n${saved.question}\n\n=== 복구 지침 ===\n이 작업은 브라우저 새로고침으로 중단되었습니다. 질문에 대한 완전한 최종 답변만 다시 작성하세요. 중간 진행 상태나 복구 사실은 답변에 설명하지 마세요.`;
+      const result=await streamGeminiAnswer(apiKey,model,prompt,partial=>{task.partial=String(partial||'').slice(-12000);persistBotTask(task);});
+      let answer=String(result.text||'').trim();
+      if(!answer) throw new Error('복구된 NEXTBOT 답변이 비어 있습니다.');
+      const toolRun=await runNextbotToolCalls(answer,currentUser.uid); answer=toolRun.text;
+      task.phase='saving'; persistBotTask(task);
+      await sendBotMessage(saved.channelId,answer,undefined,`<div class="bot-answer-meta"><span>새로고침 후 작업 복구</span></div>`,{botQuestion:saved.question,botModel:model,botRecovered:true,botTaskId:task.id});
+      task.done=true; markPersistedBotTaskDone(task); notifyBotCompletion(task,answer);
+    }catch(e){ console.error('bot task recovery failed',e); void clearPersistedBotTask(task.id); toast('중단된 NEXTBOT 작업 복구 실패: '+(e.message||e)); }
+    finally{ botTasks.delete(task.id); renderBotTaskIndicator(); }
+  }
+}
 function notifyBotCompletion(task,answer){
   const channelName=task?.channelName||'채팅방';
   const body=`#${channelName}에서 NEXTBOT 답변 생성이 완료되었습니다.`;
@@ -2263,12 +2355,14 @@ async function handleBotChatCommand(question){
   if(BOT_LEGACY_MODEL_FALLBACKS[model])model=BOT_LEGACY_MODEL_FALLBACKS[model];if(!BOT_MODEL_OPTIONS.includes(model))model=BOT_DEFAULT_MODEL;if(!apiKey){toast('관리자가 Gemini API 키를 설정하지 않았습니다.');return;}
   const taskId=++botTaskSeq;
   // 현재 채널을 작업에 고정합니다. 이후 다른 채널로 이동해도 이 작업의 출력 대상은 변하지 않습니다.
-  const task={id:taskId,channelId:currentChannelId,channelName:currentChannelName||'채팅방',startedAt:Date.now(),done:false};
+  const task={id:taskId,channelId:currentChannelId,channelName:currentChannelName||'채팅방',startedAt:Date.now(),done:false,question:String(question),model,phase:'queued',partial:''};
   botTasks.set(taskId,task);
+  void persistBotTask(task,true);
   renderBotTaskIndicator();
   const started=performance.now();let consumed=false,answer='',usage={},finalCost=BOT_CHAT_MIN_COST;
   try{
     await runTransaction(db,async tx=>{const uref=doc(db,'users',currentUser.uid),usnap=await tx.get(uref),left=botTokensOf(usnap.data());if(left<BOT_CHAT_MIN_COST)throw new Error('봇 토큰이 부족합니다.');tx.update(uref,{botTokens:left-BOT_CHAT_MIN_COST});consumed=true;});
+    task.phase='generating'; persistBotTask(task);
     const history=await collectAllChatForBot(),actorName=myDoc?.nickname||currentUser.displayName||'사용자';
     const defaultBotPrompt='당신은 이 팀 채팅 서비스의 AI 봇 NEXTBOT입니다. 사용자의 요청에 직접 답하세요. 과거 채팅 기록은 필요한 경우 참고 자료로 사용하세요. 기록에 없는 사실도 사용자가 새로운 창작, 코딩, 게임, HTML, Python 등의 생성을 요청한다면 직접 새로 만들어 제공할 수 있습니다. 기록에 없는 과거 사실을 사실인 것처럼 지어내지는 마세요. 답변은 한국어로, 필요한 경우 Markdown을 사용하세요(제목, 굵게, 기울임, 취소선, 목록, 표, 코드블록 등).';
     const baseBotPrompt=String(settings.defaultPrompt||defaultBotPrompt).trim()||defaultBotPrompt;
@@ -2285,8 +2379,8 @@ ${history}
 ${question}`;
     if(currentChannelId===task.channelId)updateBotStreamingBubble('','생성 중...',false,taskId,task.channelId);
     // Gemini는 먼저 전체 답변을 생성한 뒤, 사용자에게는 설정된 속도로 타이핑 효과를 보여줍니다.
-    const geminiResult=await streamGeminiAnswer(apiKey,model,prompt,()=>{});
-    answer=geminiResult.text; usage=geminiResult.usage||{};
+    const geminiResult=await streamGeminiAnswer(apiKey,model,prompt,partial=>{ task.partial=String(partial||'').slice(-12000); task.updatedAt=Date.now(); persistBotTask(task); });
+    answer=geminiResult.text; usage=geminiResult.usage||{}; task.partial=answer; task.phase='typing'; persistBotTask(task);
     if(!answer)throw new Error('Gemini가 빈 답변을 반환했습니다.');
     const toolRun=await runNextbotToolCalls(answer,currentUser.uid);
     answer=toolRun.text;
@@ -2312,14 +2406,17 @@ ${question}`;
     await setDoc(doc(db,'settings','botStats'),{questions,answers:answersCount,lastLatencyMs:ms,lastPingMs:ms,lastTokenCost:finalCost,lastUsage:usage,updatedAt:serverTimestamp()},{merge:true});
     const meta=`<div class="bot-answer-meta"><span>답변 속도: ${Math.floor(ms/60000).toString().padStart(2,'0')}분 ${Math.floor(ms/1000%60).toString().padStart(2,'0')}초</span><span>봇 핑: ${ms}ms</span><span>질문: ${questions}</span><span>답변: ${answersCount}</span><span>사용 토큰: ${finalCost}</span></div>`;
     if(currentChannelId===task.channelId)updateBotStreamingBubble(answer,'답변 완료',true,taskId,task.channelId);
-    await sendBotMessage(task.channelId,answer,undefined,meta,{botQuestion:question,botModel:model,botTokenCost:finalCost,botUsage:usage});
+    task.phase='saving'; persistBotTask(task);
+    await sendBotMessage(task.channelId,answer,undefined,meta,{botQuestion:question,botModel:model,botTokenCost:finalCost,botUsage:usage,botTaskId:taskId});
     task.done=true;task.completedAt=Date.now();
+    markPersistedBotTaskDone(task);
     notifyBotCompletion(task,answer);
     if(currentChannelId===task.channelId)setTimeout(()=>removeBotStreamingBubble(taskId),250);
   }catch(e){
     console.error('Gemini bot error',e);
     if(currentChannelId===task.channelId)removeBotStreamingBubble(taskId);
     if(consumed){try{await updateDoc(doc(db,'users',currentUser.uid),{botTokens:increment(BOT_CHAT_MIN_COST)});}catch(_e){}}
+    void clearPersistedBotTask(task.id);
     toast('봇 답변에 실패했습니다: '+(e.message||String(e)));
   }finally{
     botTasks.delete(taskId);
@@ -2512,7 +2609,7 @@ window.addEventListener('keydown', (e)=>{
 /* ============================================================
    NEXTBOT MEGA PACK
    - MVP/랭킹, 팀 정보, 개인 생산성, 유틸리티, 채팅 UX/설정
-   - 개인 데이터(todo/note/bookmark/favorites/settings/draft)는 계정별 localStorage 사용
+   - 개인 데이터(todo/note/bookmark/favorites/settings/draft)는 계정별 저장소 사용
    ============================================================ */
 let localTimerHandle=null, localTimerEnd=0;
 
@@ -4212,7 +4309,7 @@ async function renderAdminBot(){
     <div class="admin50-card"><h4>🤖 Gemini AI 설정</h4>
       <div class="field"><label>Gemini API 키</label><input type="password" id="a50GeminiKey" value="${escapeHtml(s.apiKey||'')}" placeholder="AIza..." autocomplete="off"></div>
       <div class="field"><label>모델 선택</label><select id="a50GeminiModel" class="admin50-input">${BOT_MODEL_OPTIONS.map(m=>`<option value="${m}" ${(s.model||BOT_DEFAULT_MODEL)===m?'selected':''}>${m}</option>`).join('')}</select></div>
-      <div class="field"><label>답변 출력 속도</label><div class="bot-typing-setting"><input id="a50BotTypingSpeed" type="range" min="0.25" max="100" step="0.25" value="${Math.min(100,Math.max(0.25,Number(s.typingSpeed||BOT_DEFAULT_TYPING_SPEED)))}"><span id="a50BotTypingSpeedValue" class="bot-typing-value">${Number(s.typingSpeed||BOT_DEFAULT_TYPING_SPEED)}x</span></div><div class="admin50-muted">AI가 답변을 모두 생성한 뒤 화면에 타이핑하는 속도입니다. 기본값은 1x이며 최대 100x까지 설정할 수 있습니다.</div></div>
+      <div class="field"><label>답변 출력 속도</label><div class="bot-typing-setting"><input id="a50BotTypingSpeed" type="range" min="0.25" max="100" step="0.25" value="${Math.min(100,Math.max(0.25,Number(s.typingSpeed||BOT_DEFAULT_TYPING_SPEED)))}"><span id="a50BotTypingSpeedValue" class="bot-typing-value">${Math.min(100,Math.max(0.25,Number(s.typingSpeed||BOT_DEFAULT_TYPING_SPEED)))}x</span></div><div class="bot-speed-presets" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button type="button" class="btn btn-sm" data-botspeed="1">1x</button><button type="button" class="btn btn-sm" data-botspeed="3">3x</button><button type="button" class="btn btn-sm" data-botspeed="10">10x</button><button type="button" class="btn btn-sm" data-botspeed="20">20x</button><button type="button" class="btn btn-sm" data-botspeed="50">50x</button><button type="button" class="btn btn-sm btn-primary" data-botspeed="100" style="width:auto">⚡ X100</button></div><div class="admin50-muted">AI가 답변을 모두 생성한 뒤 화면에 타이핑하는 속도입니다. 슬라이더와 프리셋 모두 최대 <b>100x</b>까지 지원합니다.</div></div>
       <div class="field"><label>⚡ NEXTBOT 권한</label><div class="admin50-muted">NEXTBOT은 팀원/채널 조회, 전체 메시지 검색, 전략·미션·연습·기록·테스트 조회, 지정 채널 메시지 게시를 수행할 수 있습니다. 관리자 요청에서는 메시지 고정과 채널 생성도 수행할 수 있습니다. 사용자가 명시적으로 요청하지 않은 쓰기 작업은 실행하지 않으며, 관리자 전용 작업은 관리자 권한을 검사합니다.</div></div>
       <div class="field"><label>🧠 봇 기본 프롬프트</label><textarea class="field-ta" id="a50BotDefaultPrompt" rows="9" placeholder="NEXTBOT의 기본 행동과 답변 방식을 입력하세요.">${escapeHtml(s.defaultPrompt||'')}</textarea><div class="admin50-muted">/봇채팅 질문을 처리할 때 항상 앞부분에 적용됩니다. 비워두면 기본 프롬프트를 사용합니다. 새로운 코딩·게임 생성 요청도 기록에 없다는 이유로 거절하지 않도록 설정할 수 있습니다.</div></div>
       <div class="admin50-muted">브라우저에서 Gemini API를 직접 호출하므로 API 키가 클라이언트에 노출될 수 있습니다. 실제 서비스라면 서버/Cloud Function 프록시를 권장합니다.</div>
@@ -4220,8 +4317,9 @@ async function renderAdminBot(){
     </div>
     <div class="admin50-card"><h4>💳 토큰 과금 기준</h4><div class="admin50-muted">Gemini 총 토큰 사용량 기준: 0~1,500=1 · 1,501~3,500=2 · 3,501~7,000=3 · 7,001~12,000=4 · 12,001~20,000=6 · 20,001~35,000=8 · 35,001~60,000=12 · 60,001+=16토큰</div></div>
     <div class="admin50-card"><h4>📊 봇 사용 통계</h4><div class="admin50-grid"><div class="admin50-stat"><div class="v">${Number(stats.questions||0)}</div><div class="k">질문</div></div><div class="admin50-stat"><div class="v">${Number(stats.answers||0)}</div><div class="k">답변</div></div><div class="admin50-stat"><div class="v">${Number(stats.lastPingMs||0)}ms</div><div class="k">최근 봇 핑</div></div><div class="admin50-stat"><div class="v">${Math.floor(Number(stats.lastLatencyMs||0)/60000).toString().padStart(2,'0')}분 ${Math.floor(Number(stats.lastLatencyMs||0)/1000%60).toString().padStart(2,'0')}초</div><div class="k">최근 답변 속도</div></div></div></div>`;
-  $('a50BotTypingSpeed').oninput=()=>{ $('a50BotTypingSpeedValue').textContent=`${Number($('a50BotTypingSpeed').value).toFixed(2).replace(/0+$/,'').replace(/\.$/,'')}x`; };
-  $('a50GeminiSave').onclick=async()=>{const key=$('a50GeminiKey').value.trim();const model=$('a50GeminiModel').value;const typingSpeed=Number($('a50BotTypingSpeed').value)||BOT_DEFAULT_TYPING_SPEED;const defaultPrompt=$('a50BotDefaultPrompt').value.trim();await setDoc(doc(db,'settings','bot'),{apiKey:key,model,typingSpeed,defaultPrompt,updatedAt:serverTimestamp(),updatedBy:currentUser.uid},{merge:true});await auditAdmin('update-gemini-settings','settings/bot',`model=${model}, typingSpeed=${typingSpeed}x, prompt=${defaultPrompt?'custom':'default'}`);toast('Gemini 설정을 저장했습니다.');};
+  $('a50BotTypingSpeed').oninput=()=>{ $('a50BotTypingSpeedValue').textContent=`${Math.min(100,Math.max(.25,Number($('a50BotTypingSpeed').value)||BOT_DEFAULT_TYPING_SPEED)).toFixed(2).replace(/0+$/,'').replace(/\.$/,'')}x`; };
+  document.querySelectorAll('[data-botspeed]').forEach(b=>b.onclick=()=>{const v=Math.min(100,Math.max(.25,Number(b.dataset.botspeed)||1));$('a50BotTypingSpeed').value=v;$('a50BotTypingSpeedValue').textContent=`${v}x`;});
+  $('a50GeminiSave').onclick=async()=>{const key=$('a50GeminiKey').value.trim();const model=$('a50GeminiModel').value;const typingSpeed=Math.min(100,Math.max(.25,Number($('a50BotTypingSpeed').value)||BOT_DEFAULT_TYPING_SPEED));const defaultPrompt=$('a50BotDefaultPrompt').value.trim();await setDoc(doc(db,'settings','bot'),{apiKey:key,model,typingSpeed,defaultPrompt,updatedAt:serverTimestamp(),updatedBy:currentUser.uid},{merge:true});await auditAdmin('update-gemini-settings','settings/bot',`model=${model}, typingSpeed=${typingSpeed}x, prompt=${defaultPrompt?'custom':'default'}`);toast(`Gemini 설정을 저장했습니다. · 출력 속도 ${typingSpeed}x`);};
 }
 
 /* ----- system ----- */
