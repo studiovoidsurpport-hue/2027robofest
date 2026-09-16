@@ -465,6 +465,20 @@
   .bot-answer-meta span{padding:3px 6px;border:1px solid var(--border-soft);border-radius:10px;background:var(--panel-2);}
   .bot-token-badge{font-size:10px;color:var(--blue);}
 
+  .code-preview-card{margin:9px 0;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--panel-2);}
+  .code-preview-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;border-bottom:1px solid var(--border-soft);font-size:11px;font-weight:700;}
+  .code-preview-actions{display:flex;gap:5px;flex-wrap:wrap;}
+  .code-preview-actions button{font:inherit;border:1px solid var(--border);background:var(--panel);color:var(--text);border-radius:6px;padding:4px 7px;cursor:pointer;}
+  .code-preview-frame{width:100%;height:280px;border:0;background:#fff;display:block;}
+  .code-preview-frame.python{background:#0b0d10;color:#eee;}
+  .code-preview-note{padding:8px 10px;font-size:10px;color:var(--text-faint);border-top:1px solid var(--border-soft);}
+  .code-preview-modal{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:500;display:flex;align-items:center;justify-content:center;padding:18px;}
+  .code-preview-modal-inner{width:min(1100px,96vw);height:min(760px,92vh);background:var(--card);border:1px solid var(--border);border-radius:12px;display:flex;flex-direction:column;overflow:hidden;}
+  .code-preview-modal-head{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid var(--border-soft);font-size:12px;font-weight:700;}
+  .code-preview-modal iframe{flex:1;width:100%;border:0;background:#fff;}
+  .bot-typing-setting{display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
+  .bot-typing-setting input[type=range]{width:180px;}
+  .bot-typing-value{min-width:42px;text-align:center;font-weight:700;color:var(--blue);}
   /* admin */
   .admin-tabs{display:flex; gap:6px; border-bottom:1px solid var(--border-soft); margin-bottom:16px;}
   .admin-tab{padding:9px 4px; font-size:13px; color:var(--text-faint); font-weight:600; border-bottom:2px solid transparent; cursor:pointer; margin-right:14px;}
@@ -923,6 +937,8 @@ const ADMIN_COMMAND_NAMES = ["/공지","/일정","/채널생성"];
 const BOT_CHAT_COMMAND = "/봇채팅";
 const BOT_CHAT_COST = 1;
 const BOT_DEFAULT_MODEL = "gemini-3.6-flash";
+const BOT_DEFAULT_TYPING_SPEED = 1;
+const BOT_TYPING_SPEED_OPTIONS = [0.25,0.5,0.75,1,1.5,2,3];
 const BOT_MODEL_OPTIONS = ["gemini-3.6-flash","gemini-3.5-flash","gemini-3.5-flash-lite","gemini-2.5-flash","gemini-2.5-pro"];
 const BOT_LEGACY_MODEL_FALLBACKS = {
   "gemini-2.0-flash":"gemini-3.6-flash",
@@ -1101,16 +1117,66 @@ function buildEmbedHtml(text){
   }
   return '';
 }
-function renderMentions(text){
+function codePreviewLanguage(codeEl){
+  const cls=codeEl?.className||'';
+  const m=cls.match(/language-([\w+-]+)/i);
+  return (m?m[1]:'').toLowerCase();
+}
+function openCodePreview(kind, code){
+  const existing=document.getElementById('codePreviewModal'); if(existing) existing.remove();
+  const modal=document.createElement('div'); modal.id='codePreviewModal'; modal.className='code-preview-modal';
+  const inner=document.createElement('div'); inner.className='code-preview-modal-inner';
+  const head=document.createElement('div'); head.className='code-preview-modal-head';
+  const title=document.createElement('span'); title.textContent=kind==='html'?'HTML 미리보기':'Python 미리보기';
+  const close=document.createElement('button'); close.className='btn btn-sm'; close.textContent='닫기'; close.onclick=()=>modal.remove();
+  head.append(title,close); inner.appendChild(head);
+  const iframe=document.createElement('iframe'); iframe.setAttribute('sandbox',kind==='html'?'allow-scripts allow-forms allow-modals allow-popups':'allow-scripts');
+  iframe.setAttribute('title',title.textContent);
+  if(kind==='html'){
+    iframe.srcdoc=code;
+  }else{
+    const py=code.replace(/\\/g,'\\\\').replace(/`/g,'\\`');
+    iframe.srcdoc=`<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:monospace;background:#0b0d10;color:#eee;padding:14px;white-space:pre-wrap}#out{color:#ddd}#err{color:#ff8d8d;white-space:pre-wrap}</style></head><body><div id="out">Python 실행 준비 중...</div><div id="err"></div><script src="https://cdn.jsdelivr.net/pyodide/v0.27.2/full/pyodide.js"><\\/script><script>const source=\`${py}\`; (async()=>{try{const pyodide=await loadPyodide();pyodide.setStdout({batched:s=>{document.getElementById('out').textContent=s||'(출력 없음)';}});await pyodide.runPythonAsync(source);document.getElementById('out').textContent+='\\n\\n✓ 실행 완료';}catch(e){document.getElementById('err').textContent=String(e);document.getElementById('out').textContent='';}})();<\\/script></body></html>`;
+  }
+  inner.appendChild(iframe); modal.appendChild(inner); document.body.appendChild(modal);
+  modal.addEventListener('click',e=>{if(e.target===modal)modal.remove();});
+}
+function addCodePreviewToPre(pre){
+  if(!pre || pre.dataset.previewDone==='1') return;
+  const code=pre.querySelector('code'); if(!code) return;
+  const lang=codePreviewLanguage(code);
+  let kind='';
+  if(['html','htm'].includes(lang)) kind='html';
+  else if(['python','py'].includes(lang)) kind='python';
+  if(!kind) return;
+  pre.dataset.previewDone='1';
+  const card=document.createElement('div'); card.className='code-preview-card';
+  const head=document.createElement('div'); head.className='code-preview-head';
+  const label=document.createElement('span'); label.textContent=kind==='html'?'🌐 HTML 미리보기':'🐍 Python 미리보기';
+  const actions=document.createElement('div'); actions.className='code-preview-actions';
+  const preview=document.createElement('button'); preview.textContent='미리보기';
+  preview.onclick=()=>openCodePreview(kind,code.textContent);
+  actions.appendChild(preview);
+  head.append(label,actions); card.appendChild(head);
+  const frame=document.createElement('iframe'); frame.className='code-preview-frame'+(kind==='python'?' python':''); frame.setAttribute('sandbox',kind==='html'?'allow-scripts allow-forms allow-modals allow-popups':'allow-scripts'); frame.setAttribute('title',label.textContent);
+  if(kind==='html') frame.srcdoc=code.textContent;
+  else { frame.srcdoc='<!doctype html><html><body style="font-family:monospace;padding:12px;background:#0b0d10;color:#eee">🐍 Python은 <b>미리보기</b> 버튼을 눌러 안전한 샌드박스에서 실행합니다.</body></html>'; }
+  card.appendChild(frame);
+  const note=document.createElement('div'); note.className='code-preview-note'; note.textContent=kind==='python'?'Python은 Pyodide를 사용해 브라우저 샌드박스에서 실행됩니다. 외부 네트워크/파일 접근은 제한될 수 있습니다.':'HTML은 별도 샌드박스 iframe에서 실행됩니다.'; card.appendChild(note);
+  pre.insertAdjacentElement('afterend',card);
+}
+function enhanceCodePreviews(root){
+  if(!root) return;
+  root.querySelectorAll('pre').forEach(addCodePreviewToPre);
+}
+function renderMentions(text,withCodePreviews=true){
   const raw=String(text||'');
-  // marked는 HTML을 만들고 DOMPurify가 위험한 태그/속성을 제거합니다.
   if(window.marked && window.DOMPurify){
     try{
       marked.setOptions({breaks:true,gfm:true});
       let html=marked.parse(raw);
       html=DOMPurify.sanitize(html,{ADD_ATTR:['target','rel']});
       const box=document.createElement('div'); box.innerHTML=html;
-      // 멘션/채널 태그는 Markdown 파싱 후 안전하게 변환합니다.
       box.querySelectorAll('*').forEach(node=>{
         if(node.children.length===0 && node.textContent){
           let t=node.textContent;
@@ -1124,10 +1190,22 @@ function renderMentions(text){
         }
       });
       box.querySelectorAll('a').forEach(a=>{a.target='_blank';a.rel='noopener noreferrer';});
+      if(withCodePreviews) enhanceCodePreviews(box);
       return box.innerHTML;
     }catch(e){console.warn('markdown render failed',e);}
   }
   return escapeHtml(raw).replace(/\n/g,'<br>');
+}
+async function animateBotTyping(text,speed,onRender){
+  const chars=Array.from(String(text||''));
+  let shown='';
+  const delay=Math.max(5,Math.round(24/Math.max(.1,Number(speed)||1)));
+  for(let i=0;i<chars.length;i++){
+    shown+=chars[i];
+    if(i%2===0 || i===chars.length-1) onRender(shown);
+    await new Promise(r=>setTimeout(r,delay));
+  }
+  return shown;
 }
 
 function fmtTime(ts){
@@ -2011,12 +2089,12 @@ async function bumpBotStat(field,n=1){
   catch(e){ await setDoc(doc(db,'settings','botStats'),{[field]:n,updatedAt:serverTimestamp()},{merge:true}); }
 }
 function removeBotStreamingBubble(){const el=document.getElementById('botStreamingBubble');if(el)el.remove();}
-function updateBotStreamingBubble(text,status='생성 중...'){
+function updateBotStreamingBubble(text,status='생성 중...',withCodePreviews=false){
   let box=document.getElementById('botStreamingBubble'), list=$('msgList'); if(!list)return;
   if(!box){box=document.createElement('div');box.id='botStreamingBubble';box.className='bot-streaming-bubble';box.innerHTML=`<div class="bot-streaming-head"><span>🤖 NEXTBOT</span><span class="bot-streaming-status" data-bot-status>${escapeHtml(status)}</span></div><div class="bot-streaming-content markdown-body" data-bot-stream-content></div>`;list.appendChild(box);}
   box.querySelector('[data-bot-status]').textContent=status;
   const content=box.querySelector('[data-bot-stream-content]');
-  content.innerHTML=text?renderMentions(text):'<span class="bot-streaming-status">생성 중...</span>';
+  content.innerHTML=text?renderMentions(text,withCodePreviews):'<span class="bot-streaming-status">생성 중...</span>';
   if(text){const cursor=document.createElement('span');cursor.className='bot-streaming-cursor';content.appendChild(cursor);}
   list.scrollTop=list.scrollHeight;
 }
@@ -2042,13 +2120,18 @@ async function handleBotChatCommand(question){
     const prompt=`당신은 이 팀 채팅 서비스의 AI 봇 NEXTBOT입니다.\n현재 질문자: ${actorName}\n\n아래는 지금까지의 전체 채팅 기록입니다. 기록을 근거로 질문에 답하세요. 회의 요약, 특정 사람/채널에 관한 질문, 일반적인 개인 질문 모두 답할 수 있습니다. 기록에 없는 사실은 추측하지 말고 모른다고 말하세요. 답변은 한국어로, 필요한 경우 Markdown을 사용하세요(제목, 굵게, 기울임, 취소선, 목록, 표, 코드블록 등).\n\n=== 전체 채팅 기록 ===\n${history}\n\n=== 질문 ===\n${question}`;
     const target=(currentChannelId&&!FEATURE_CHANNELS[currentChannelId])?currentChannelId:BOT_CHANNEL_ID,canShowHere=target===currentChannelId;
     if(canShowHere)updateBotStreamingBubble('','생성 중...');
-    answer=await streamGeminiAnswer(apiKey,model,prompt,partial=>{if(canShowHere)updateBotStreamingBubble(partial,'생성 중...');});
+    // Gemini는 먼저 전체 답변을 생성한 뒤, 사용자에게는 설정된 속도로 타이핑 효과를 보여줍니다.
+    answer=await streamGeminiAnswer(apiKey,model,prompt,()=>{});
     if(!answer)throw new Error('Gemini가 빈 답변을 반환했습니다.');
+    const typingSpeed=Math.max(.25,Number(settings.typingSpeed||BOT_DEFAULT_TYPING_SPEED));
+    if(canShowHere){
+      await animateBotTyping(answer,typingSpeed,partial=>updateBotStreamingBubble(partial,'답변 출력 중...',false));
+    }
     const ms=Math.max(0,Math.round(performance.now()-started));let stats={};try{stats=(await getDoc(doc(db,'settings','botStats'))).data()||{};}catch(e){}
     const questions=Number(stats.questions||0)+1,answersCount=Number(stats.answers||0)+1;
     await setDoc(doc(db,'settings','botStats'),{questions,answers:answersCount,lastLatencyMs:ms,lastPingMs:ms,updatedAt:serverTimestamp()},{merge:true});
     const meta=`<div class="bot-answer-meta"><span>답변 속도: ${Math.floor(ms/60000).toString().padStart(2,'0')}분 ${Math.floor(ms/1000%60).toString().padStart(2,'0')}초</span><span>봇 핑: ${ms}ms</span><span>질문: ${questions}</span><span>답변: ${answersCount}</span></div>`;
-    if(canShowHere)updateBotStreamingBubble(answer,'답변 완료');
+    if(canShowHere)updateBotStreamingBubble(answer,'답변 완료',true);
     await sendBotMessage(target,`${meta}\n${answer}`);if(canShowHere)setTimeout(removeBotStreamingBubble,250);
   }catch(e){console.error('Gemini bot error',e);removeBotStreamingBubble();if(consumed){try{await updateDoc(doc(db,'users',currentUser.uid),{botTokens:increment(BOT_CHAT_COST)});}catch(_e){}}toast('봇 답변에 실패했습니다: '+(e.message||String(e)));}
 }
@@ -3937,11 +4020,13 @@ async function renderAdminBot(){
     <div class="admin50-card"><h4>🤖 Gemini AI 설정</h4>
       <div class="field"><label>Gemini API 키</label><input type="password" id="a50GeminiKey" value="${escapeHtml(s.apiKey||'')}" placeholder="AIza..." autocomplete="off"></div>
       <div class="field"><label>모델 선택</label><select id="a50GeminiModel" class="admin50-input">${BOT_MODEL_OPTIONS.map(m=>`<option value="${m}" ${(s.model||BOT_DEFAULT_MODEL)===m?'selected':''}>${m}</option>`).join('')}</select></div>
+      <div class="field"><label>답변 출력 속도</label><div class="bot-typing-setting"><input id="a50BotTypingSpeed" type="range" min="0.25" max="3" step="0.25" value="${Number(s.typingSpeed||BOT_DEFAULT_TYPING_SPEED)}"><span id="a50BotTypingSpeedValue" class="bot-typing-value">${Number(s.typingSpeed||BOT_DEFAULT_TYPING_SPEED)}x</span></div><div class="admin50-muted">AI가 답변을 모두 생성한 뒤 화면에 타이핑하는 속도입니다. 기본값은 1x입니다.</div></div>
       <div class="admin50-muted">브라우저에서 Gemini API를 직접 호출하므로 API 키가 클라이언트에 노출될 수 있습니다. 실제 서비스라면 서버/Cloud Function 프록시를 권장합니다.</div>
       <div class="modal-actions"><button class="btn btn-primary" id="a50GeminiSave" style="width:auto">설정 저장</button></div>
     </div>
     <div class="admin50-card"><h4>📊 봇 사용 통계</h4><div class="admin50-grid"><div class="admin50-stat"><div class="v">${Number(stats.questions||0)}</div><div class="k">질문</div></div><div class="admin50-stat"><div class="v">${Number(stats.answers||0)}</div><div class="k">답변</div></div><div class="admin50-stat"><div class="v">${Number(stats.lastPingMs||0)}ms</div><div class="k">최근 봇 핑</div></div><div class="admin50-stat"><div class="v">${Math.floor(Number(stats.lastLatencyMs||0)/60000).toString().padStart(2,'0')}분 ${Math.floor(Number(stats.lastLatencyMs||0)/1000%60).toString().padStart(2,'0')}초</div><div class="k">최근 답변 속도</div></div></div></div>`;
-  $('a50GeminiSave').onclick=async()=>{const key=$('a50GeminiKey').value.trim();const model=$('a50GeminiModel').value;await setDoc(doc(db,'settings','bot'),{apiKey:key,model,updatedAt:serverTimestamp(),updatedBy:currentUser.uid},{merge:true});await auditAdmin('update-gemini-settings','settings/bot',`model=${model}`);toast('Gemini 설정을 저장했습니다.');};
+  $('a50BotTypingSpeed').oninput=()=>{ $('a50BotTypingSpeedValue').textContent=`${Number($('a50BotTypingSpeed').value).toFixed(2).replace(/0+$/,'').replace(/\.$/,'')}x`; };
+  $('a50GeminiSave').onclick=async()=>{const key=$('a50GeminiKey').value.trim();const model=$('a50GeminiModel').value;const typingSpeed=Number($('a50BotTypingSpeed').value)||BOT_DEFAULT_TYPING_SPEED;await setDoc(doc(db,'settings','bot'),{apiKey:key,model,typingSpeed,updatedAt:serverTimestamp(),updatedBy:currentUser.uid},{merge:true});await auditAdmin('update-gemini-settings','settings/bot',`model=${model}, typingSpeed=${typingSpeed}x`);toast('Gemini 설정을 저장했습니다.');};
 }
 
 /* ----- system ----- */
