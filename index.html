@@ -2313,7 +2313,7 @@ async function recoverPendingBotTasks(){
       if(BOT_LEGACY_MODEL_FALLBACKS[model])model=BOT_LEGACY_MODEL_FALLBACKS[model];
       if(!BOT_MODEL_OPTIONS.includes(model)||!apiKey) throw new Error('NEXTBOT 복구 설정을 확인해주세요.');
       const history=await collectAllChatForBot();
-      const defaultBotPrompt='당신은 이 팀 채팅 서비스의 AI 봇 NEXTBOT입니다. 사용자의 요청에 직접 답하세요. 과거 채팅 기록은 필요한 경우 참고 자료로 사용하세요. 기록에 없는 사실도 사용자가 새로운 창작, 코딩, 게임, HTML, Python 등의 생성을 요청한다면 직접 새로 만들어 제공할 수 있습니다. 기록에 없는 과거 사실을 사실인 것처럼 지어내지는 마세요. 답변은 한국어로, 필요한 경우 Markdown을 사용하세요.';
+      const defaultBotPrompt='당신은 이 팀 채팅 서비스의 AI 봇 NEXTBOT입니다. 사용자의 요청에 직접 답하세요. 과거 채팅 기록은 필요한 경우 참고 자료로 사용하세요. 기록에 없는 사실도 사용자가 새로운 창작, 코딩, 게임, HTML, Python 등의 생성을 요청한다면 직접 새로 만들어 제공할 수 있습니다. 기록에 없는 과거 사실을 사실인 것처럼 지어내지는 마세요. 답변은 한국어로, 필요한 경우 Markdown을 사용하세요. 코드나 긴 문서는 절대 생략하지 말고 완성본 전체를 제공하세요.';
       const baseBotPrompt=String(settings.defaultPrompt||defaultBotPrompt).trim()||defaultBotPrompt;
       const prompt=`${baseBotPrompt}\n\n${nextbotToolCatalog()}\n\n현재 질문자: ${myDoc?.nickname||'사용자'}\n\n=== 전체 채팅 기록 ===\n${history}\n\n=== 중단된 작업의 질문 ===\n${saved.question}\n\n=== 복구 지침 ===\n이 작업은 브라우저 새로고침으로 중단되었습니다. 질문에 대한 완전한 최종 답변만 다시 작성하세요. 중간 진행 상태나 복구 사실은 답변에 설명하지 마세요.`;
       const result=await streamGeminiAnswer(apiKey,model,prompt,partial=>{task.partial=String(partial||'').slice(-12000);persistBotTask(task);});
@@ -2340,12 +2340,51 @@ function notifyBotCompletion(task,answer){
 }
 async function streamGeminiAnswer(apiKey,model,prompt,onText){
   const url=`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
-  const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{role:'user',parts:[{text:prompt}]}],generationConfig:{temperature:0.35,maxOutputTokens:2048}})});
-  if(!res.ok){let data={};try{data=await res.json();}catch(_e){}const msg=data?.error?.message||`Gemini API 오류 (${res.status})`;const friendly=res.status===403?'Gemini 프로젝트 접근 권한이 거부되었습니다. 관리자 API 키/프로젝트 상태를 확인해주세요.':res.status===429?'Gemini 요청 한도에 도달했습니다. 잠시 후 다시 시도해주세요.':res.status===404?'선택한 Gemini 모델을 찾을 수 없습니다. 관리자 페이지에서 모델을 확인해주세요.':msg;throw new Error(friendly);}
-  if(!res.body)throw new Error('이 브라우저에서는 Gemini 스트리밍을 지원하지 않습니다.');
-  const reader=res.body.getReader(),decoder=new TextDecoder('utf-8');let buffer='',answer='',usage={};
-  const consume=async raw=>{for(const line of raw.split(/\r?\n/)){const t=line.trim();if(!t||!t.startsWith('data:'))continue;const payload=t.slice(5).trim();if(payload==='[DONE]')continue;try{const obj=JSON.parse(payload),parts=obj?.candidates?.[0]?.content?.parts||[],chunk=parts.map(x=>x.text||'').join('');if(obj?.usageMetadata)usage={...usage,...obj.usageMetadata};if(chunk){answer+=chunk;onText(answer);}}catch(_e){}}};
-  while(true){const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});const events=buffer.split(/\n\n/);buffer=events.pop()||'';for(const ev of events)await consume(ev);}buffer+=decoder.decode();if(buffer.trim())await consume(buffer);return {text:answer.trim(),usage};
+  // 긴 코드/문서가 2048토큰에서 잘리던 문제를 해결합니다. 기본 출력 한도를 크게 올리고,
+  // 그래도 MAX_TOKENS로 끝나면 같은 답변을 이어 쓰도록 최대 3회 자동 연결합니다.
+  const MAX_OUTPUT_TOKENS=32768;
+  const MAX_CONTINUATIONS=3;
+  let answer='',usage={},lastFinishReason='';
+  const mergeUsage=(u)=>{
+    if(!u)return;
+    const keys=['promptTokenCount','candidatesTokenCount','totalTokenCount','cachedContentTokenCount'];
+    for(const k of keys){if(Number.isFinite(Number(u[k])))usage[k]=(Number(usage[k])||0)+Number(u[k]);}
+    for(const [k,v] of Object.entries(u)){if(!(k in usage))usage[k]=v;}
+  };
+  const request=async(reqPrompt,maxTokens)=>{
+    const body={contents:[{role:'user',parts:[{text:reqPrompt}]}],generationConfig:{temperature:0.35,maxOutputTokens:maxTokens}};
+    let res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!res.ok){
+      let data={};try{data=await res.json();}catch(_e){}
+      // 일부 모델/프로젝트가 32768을 허용하지 않는 경우 16384로 한 번 낮춰 재시도합니다.
+      if((res.status===400||res.status===413) && maxTokens>16384){
+        res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,generationConfig:{temperature:0.35,maxOutputTokens:16384}})});
+      }
+      if(!res.ok){data={};try{data=await res.json();}catch(_e){}const msg=data?.error?.message||`Gemini API 오류 (${res.status})`;const friendly=res.status===403?'Gemini 프로젝트 접근 권한이 거부되었습니다. 관리자 API 키/프로젝트 상태를 확인해주세요.':res.status===429?'Gemini 요청 한도에 도달했습니다. 잠시 후 다시 시도해주세요.':res.status===404?'선택한 Gemini 모델을 찾을 수 없습니다. 관리자 페이지에서 모델을 확인해주세요.':msg;throw new Error(friendly);}
+    }
+    if(!res.body)throw new Error('이 브라우저에서는 Gemini 스트리밍을 지원하지 않습니다.');
+    const reader=res.body.getReader(),decoder=new TextDecoder('utf-8');let buffer='',partAnswer='';
+    const consume=async raw=>{for(const line of raw.split(/\r?\n/)){const t=line.trim();if(!t||!t.startsWith('data:'))continue;const payload=t.slice(5).trim();if(payload==='[DONE]')continue;try{const obj=JSON.parse(payload),parts=obj?.candidates?.[0]?.content?.parts||[],chunk=parts.map(x=>x.text||'').join('');if(obj?.usageMetadata)mergeUsage(obj.usageMetadata);const reason=obj?.candidates?.[0]?.finishReason;if(reason)lastFinishReason=reason;if(chunk){partAnswer+=chunk;answer+=chunk;onText(answer);}}catch(_e){}}};
+    while(true){const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});const events=buffer.split(/\n\n/);buffer=events.pop()||'';for(const ev of events)await consume(ev);}buffer+=decoder.decode();if(buffer.trim())await consume(buffer);
+    return partAnswer;
+  };
+  let continuation=0;
+  let reqPrompt=prompt;
+  while(true){
+    lastFinishReason='';
+    await request(reqPrompt,MAX_OUTPUT_TOKENS);
+    if(lastFinishReason!=='MAX_TOKENS'||continuation>=MAX_CONTINUATIONS)break;
+    continuation++;
+    // 이전 출력 전체를 기준으로 이어 쓰게 하여 코드블록/문서가 중간에서 끊겨도 자동 완성합니다.
+    reqPrompt=`${prompt}
+
+=== 지금까지 생성된 답변 ===
+${answer}
+
+=== 이어쓰기 지침 ===
+위 답변은 출력 토큰 한도 때문에 중간에서 끊겼습니다. 위 내용을 절대 반복하거나 처음부터 다시 쓰지 말고, 마지막 문자 바로 다음부터 자연스럽게 이어서 작성하세요. 코드라면 기존 코드의 정확한 다음 줄부터 계속하고, 필요한 닫는 괄호/태그/코드블록까지 완전하게 마무리하세요. 설명 없이 이어지는 내용만 출력하세요.`;
+  }
+  return {text:answer.trim(),usage};
 }
 async function handleBotChatCommand(question){
   if(!question){toast('사용법: /봇채팅 질문');return;}
@@ -2364,7 +2403,7 @@ async function handleBotChatCommand(question){
     await runTransaction(db,async tx=>{const uref=doc(db,'users',currentUser.uid),usnap=await tx.get(uref),left=botTokensOf(usnap.data());if(left<BOT_CHAT_MIN_COST)throw new Error('봇 토큰이 부족합니다.');tx.update(uref,{botTokens:left-BOT_CHAT_MIN_COST});consumed=true;});
     task.phase='generating'; persistBotTask(task);
     const history=await collectAllChatForBot(),actorName=myDoc?.nickname||currentUser.displayName||'사용자';
-    const defaultBotPrompt='당신은 이 팀 채팅 서비스의 AI 봇 NEXTBOT입니다. 사용자의 요청에 직접 답하세요. 과거 채팅 기록은 필요한 경우 참고 자료로 사용하세요. 기록에 없는 사실도 사용자가 새로운 창작, 코딩, 게임, HTML, Python 등의 생성을 요청한다면 직접 새로 만들어 제공할 수 있습니다. 기록에 없는 과거 사실을 사실인 것처럼 지어내지는 마세요. 답변은 한국어로, 필요한 경우 Markdown을 사용하세요(제목, 굵게, 기울임, 취소선, 목록, 표, 코드블록 등).';
+    const defaultBotPrompt='당신은 이 팀 채팅 서비스의 AI 봇 NEXTBOT입니다. 사용자의 요청에 직접 답하세요. 과거 채팅 기록은 필요한 경우 참고 자료로 사용하세요. 기록에 없는 사실도 사용자가 새로운 창작, 코딩, 게임, HTML, Python 등의 생성을 요청한다면 직접 새로 만들어 제공할 수 있습니다. 기록에 없는 과거 사실을 사실인 것처럼 지어내지는 마세요. 답변은 한국어로, 필요한 경우 Markdown을 사용하세요(제목, 굵게, 기울임, 취소선, 목록, 표, 코드블록 등). 코드나 긴 문서를 요청받으면 절대 임의로 생략하거나 요약하지 말고 실행 가능한 완성본 전체를 제공하세요. 출력 한도에 닿으면 자동으로 이어서 완성해야 하며, 코드의 중간 부분을 생략했다는 식의 축약 표현을 사용하지 마세요.';
     const baseBotPrompt=String(settings.defaultPrompt||defaultBotPrompt).trim()||defaultBotPrompt;
     const prompt=`${baseBotPrompt}
 
